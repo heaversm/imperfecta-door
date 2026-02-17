@@ -287,6 +287,22 @@
 - If there is an indoor chime/receiver: hardware sense output → Pi GPIO/opto → WLED
 - If neither: replace doorbell with one that supports reliable integrations/local signal
 
+### Prototype-first implementation package (one-strip bring-up)
+
+- **Step-by-step guide**: `prototype/README.md`
+- **Python starter client**: `prototype/wled_client.py`
+- **Python deps**: `prototype/requirements.txt`
+- **Node starter client (optional)**: `prototype/wled_client.mjs`
+- **Node deps**: `prototype/package.json`
+
+Use this flow:
+
+1. Fresh Pi install + updates
+2. Bring up Dig-Quad + one strip in WLED
+3. Verify API control with Python script
+4. Save/tune presets for ambient and ring behavior
+5. Add fusing/injection/protection before scaling to two full runs
+
 ### Diagrams (for non-technical explanation)
 
 #### System overview (power + control)

@@ -1,0 +1,14 @@
+{
+  "name": "imperfecta-led-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "status": "node wled_client.mjs --host $WLED_HOST status",
+    "on": "node wled_client.mjs --host $WLED_HOST on",
+    "off": "node wled_client.mjs --host $WLED_HOST off"
+  },
+  "dependencies": {
+    "axios": "^1.7.9"
+  }
+}
