@@ -46,6 +46,14 @@ This file centralizes reference pages and example purchase links for the build.
 - Node-RED (optional low-code orchestration)
   - https://nodered.org/
 
+## Light sensor (for day/night gating)
+
+- Adafruit TSL2591 (higher-quality digital lux sensor, I2C)
+  - https://www.adafruit.com/product/1980
+  - https://learn.adafruit.com/adafruit-tsl2591
+- BH1750 module (budget digital lux sensor, I2C)
+  - https://www.amazon.com/HiLetgo-BH1750FVI-intensity-illumination-arduino/dp/B00M0F29OS
+
 ## Wiring / install hardware (examples)
 
 - WAGO 221 Series Lever-Nuts (wire splicing connectors)
@@ -62,6 +70,41 @@ This file centralizes reference pages and example purchase links for the build.
 
 - TVS diode example part (SMBJ15A class; 600W TVS)
   - https://www.mouser.com/ProductDetail/Diodes-Incorporated/SMBJ15A-13-F?qs=gaDBXWSqsDC%2BdBb/JB5/xQ%3D%3D
+
+## Quantity + indoor optionality cheat sheet (for this project)
+
+Assumes 2 runs x ~30ft each, WS2815 12V, controller box near strips.
+
+- **LED strip reels (required)**
+  - Qty: **4 x 5m reels** (20m total)
+  - Indoor optional?: **No**
+- **Diffuser channel/tube (recommended)**
+  - Qty: **~20m** total (+10% spare if possible)
+  - Indoor optional?: **Technically yes**, but strongly recommended for your visual goal
+- **12V injection wire (required)**
+  - Qty: start with **100ft** spool (14–16 AWG is a good starting point)
+  - Indoor optional?: **No**
+- **Data/signal wire (required)**
+  - Qty: **15–25ft** is usually enough if controller is nearby
+  - Indoor optional?: **No**
+- **Inline fuse holders (required)**
+  - Qty: **4 minimum** (one per injection branch: 2 strips x both ends)
+  - Indoor optional?: **No**
+- **Blade fuses (required)**
+  - Qty: **8–12 assorted** (for tuning + spares)
+  - Indoor optional?: **No**
+- **Cable glands / strain relief (recommended)**
+  - Qty: **8–12** depending on enclosure cable count
+  - Indoor optional?: **Optional but strongly recommended**
+- **Wire protectors (braided sleeve / split loom) (recommended)**
+  - Qty: **25–50ft** depending on visible routing
+  - Indoor optional?: **Optional**, but recommended for abrasion protection + clean install
+- **TVS diodes (recommended protection)**
+  - Qty: **2–4**
+  - Indoor optional?: **Optional**, but recommended for reliability
+- **Enclosure (required)**
+  - Qty: **1** (controller + PSU + wiring)
+  - Indoor optional?: **No**
 
 ## Notes
 
