@@ -7,6 +7,8 @@ This guide gets you from **fresh Raspberry Pi** to **programmatic control of one
 - Hardware: Dig-Quad + Mean Well 12V PSU + 1x WS2815 strip
 - Software: WLED on controller + Python script on Pi 3
 - Goal: quickly test colors/effects/presets from code before scaling to full install
+- Wiring schematic: see `wiring.md`
+- Editable diagram: `wiring.drawio`
 
 ---
 
@@ -57,6 +59,11 @@ pip install -r requirements.txt
 ---
 
 ## Phase 2 - Controller + strip bring-up (minimal)
+
+Communication note:
+
+- Pi controls Dig-Quad over local network via WLED API (`/json/state`).
+- No direct Pi-to-Dig-Quad control wire is required for this prototype phase.
 
 ### 1) Flash/configure WLED on Dig-Quad
 
