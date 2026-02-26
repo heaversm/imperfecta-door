@@ -1,3 +1,4 @@
 highlights.json
 *.bkp
 *.dtmp
+.DS_Store
