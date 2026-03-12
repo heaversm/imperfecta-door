@@ -71,6 +71,16 @@ Communication note:
 - Flash WLED (if not pre-flashed)
 - Join Wi-Fi and note WLED IP address
 
+On mac - look for wled-ap: wifi password is `wled1234`
+mDNS address: `http://wled-7fbab4.local`
+
+This is what you enter in the browser to control the dig-quad
+LED Voltage: WS2815 (12mA)
+GPIO 0 = Push Button
+Configure each output channel to control a different strip
+Length 300 - GPIO 16, etc.
+Brightness Limiter: 1250 if off the normal power supply, otherwise 4000
+
 ### 2) Minimal wiring
 
 - PSU -> Dig-Quad power input (12V and GND)

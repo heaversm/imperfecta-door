@@ -1,5 +1,7 @@
 # Prototype Wiring Schematics (Dig-Quad + 12V PSU + 1 Strip + Pi)
 
+[Wiring Guide](https://quinled.info/2020/10/03/quinled-dig-quad-wiring-guide/)
+
 This is the **minimal bench wiring** for first bring-up.
 
 ## 1) How Pi talks to Dig-Quad
@@ -24,7 +26,7 @@ AC MAINS
    v
 +-----------------------+
 | Mean Well LRS-350-12  |
-|   +V            -V    |
+|   +V            -V    |I'm
 +----|------------|-----+
      |            |
      |            +---------------------> Dig-Quad GND
