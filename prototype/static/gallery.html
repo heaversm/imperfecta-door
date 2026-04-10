@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Gallery</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    overflow: hidden;
+    cursor: none;
+    font-family: sans-serif;
+  }
+  #gallery {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    align-content: flex-start;
+    width: 100vw;
+    height: 100vh;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  .face {
+    display: block;
+    line-height: 0;
+  }
+  .face img {
+    display: block;
+    height: 25vh;
+    width: auto;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+  }
+  .face img.loaded {
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+<div id="gallery"></div>
+<script>
+const gallery = document.getElementById('gallery');
+
+function addFace(filename) {
+  const cell = document.createElement('div');
+  cell.className = 'face';
+  cell.dataset.filename = filename;
+
+  const img = document.createElement('img');
+  img.src = '/captures/' + filename;
+  img.alt = '';
+  img.onload = () => {
+    img.classList.add('loaded');
+    trimOverflow();
+  };
+  cell.appendChild(img);
+  gallery.appendChild(cell);
+}
+
+function trimOverflow() {
+  // Remove oldest faces until content fits within the viewport
+  while (gallery.scrollHeight > gallery.clientHeight && gallery.children.length > 1) {
+    gallery.removeChild(gallery.firstElementChild);
+  }
+}
+
+function removeFace(filename) {
+  const cell = gallery.querySelector(`.face[data-filename="${filename}"]`);
+  if (cell) cell.remove();
+}
+
+// Load existing faces on page load
+fetch('/faces')
+  .then(r => r.json())
+  .then(faces => faces.forEach(addFace));
+
+// Listen for real-time updates via SSE
+const source = new EventSource('/events');
+
+source.addEventListener('add', (e) => {
+  const data = JSON.parse(e.data);
+  addFace(data.filename);
+});
+
+source.addEventListener('remove', (e) => {
+  const data = JSON.parse(e.data);
+  removeFace(data.filename);
+});
+
+source.onerror = () => {
+  // Auto-reconnects by default; no action needed
+};
+</script>
+</body>
+</html>

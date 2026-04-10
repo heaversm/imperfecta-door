@@ -43,7 +43,7 @@ MAIXCAM_PORT = 8080
 
 WLED_IP = "10.0.0.220"          # WLED controller (Dig-Quad)
 
-BG_SERVER_IP = "10.0.0.18"     # Mac running bg_removal_server.py (Mac LAN IP)
+BG_SERVER_IP = "127.0.0.1"     # bg_removal_server.py runs locally on Pi
 BG_SERVER_PORT = 5050
 
 RING_PRESET_ID = 1              # WLED preset for ring animation
