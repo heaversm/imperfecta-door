@@ -1,0 +1,14 @@
+[Unit]
+Description=Imperfecta Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/home/imperfecta
+ExecStart=/usr/bin/python3 /home/imperfecta/orchestrator.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

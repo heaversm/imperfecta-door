@@ -1,0 +1,7 @@
+[basic]
+id = face_capture_server
+name = Face Capture Server
+version = 1.0.0
+icon = detector
+author = imperfecta
+desc = Multi-face capture HTTP server
