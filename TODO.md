@@ -1,8 +1,8 @@
 # Imperfecta TODO
 
-## 1. Run entirely on Pi (eliminate Mac from chain)
+## ~~1. Run entirely on Pi (eliminate Mac from chain)~~ DONE
 
-Install rembg and its dependencies on the Pi so background removal and the gallery web server run there instead of on the Mac. This means the only things needed to run the installation are the Pi, MaixCam, WLED, and power — no laptop required. The main risk is that rembg on a Pi 3 may be too slow (could be 10-30s per image vs ~1.5s on Mac), so we may need to test on a Pi 4/5 or find a lighter-weight bg removal model.
+BG removal now runs on Pi via Replicate cloud API (`cjwbw/rembg`). Gallery served from Pi at `http://10.0.0.206:5050/`. Both services auto-start on boot via systemd (`orchestrator.service`, `bg_removal.service`). No Mac needed.
 
 ## 2. Replace button with doorbell trigger
 

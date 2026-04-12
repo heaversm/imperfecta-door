@@ -5,22 +5,22 @@
 | Device | IP | Access |
 |--------|-----|--------|
 | MaixCam | 10.0.0.14 | Wi-Fi (DHCP). SSH: `ssh root@10.0.0.14` (no password) |
-| Raspberry Pi | 10.0.0.206 | `ssh -o PubkeyAuthentication=no imperfecta@10.0.0.206` (pw: ALRIGHTY*weighing0weekly) |
+| Raspberry Pi | 10.0.0.206 | `ssh imperfecta-pi` (passwordless via SSH key) |
 | WLED / Dig-Quad | 10.0.0.220 | Browser: http://10.0.0.220 |
-| Mac (bg server) | 10.0.0.18 | LAN IP. Gallery: http://localhost:5050/ |
 
 Note: MaixCam and WLED IPs are DHCP — may change after router reboot. If they stop responding, find them with `dns-sd -B _http._tcp local` or `arp -a | grep 10.0.0`.
 
 ## Quick Start
 
-1. **Plug in MaixCam and Dig-Quad** — both auto-start (MaixCam, WLED, and Pi orchestrator all start on boot)
-2. **Mac terminal:** `cd /Users/mheavers/Desktop/imperfecta/maixcam && python3 bg_removal_server.py`
-3. **Mac browser:** `http://localhost:5050/`
-4. **Press the button** with faces visible to MaixCam
+1. **Plug in MaixCam, Dig-Quad, and Pi** — all three auto-start on boot
+2. **Mac browser:** `http://10.0.0.206:5050/`
+3. **Press the button** with faces visible to MaixCam
 
-Pi orchestrator auto-starts via systemd (`orchestrator.service`). To manage it manually: `ssh -o PubkeyAuthentication=no imperfecta@10.0.0.206` (pw: `ALRIGHTY*weighing0weekly`), then `sudo systemctl stop/start/status orchestrator`.
+Everything runs on the Pi — no Mac terminal needed. BG removal uses Replicate cloud API.
 
-**Note:** rembg is NOT installed on the Pi yet. The Mac bg_removal_server is still required for background removal. Future goal: move bg removal to Pi to eliminate Mac from the chain.
+Pi services auto-start via systemd. To manage manually: `ssh imperfecta-pi`, then:
+- `sudo systemctl stop/start/status orchestrator`
+- `sudo systemctl stop/start/status bg_removal`
 
 ## Verification (if something seems wrong)
 
@@ -32,6 +32,11 @@ curl -m 10 http://10.0.0.14:8080/capture-all
 ### WLED
 ```
 python3 /Users/mheavers/Desktop/imperfecta/_project/prototype/wled_client.py --host 10.0.0.220 status
+```
+
+### BG removal server on Pi
+```
+ssh imperfecta-pi "curl -s http://localhost:5050/health"
 ```
 
 ## Running the Full Chain
@@ -77,39 +82,43 @@ python3 /Users/mheavers/Desktop/imperfecta/_project/prototype/wled_client.py --h
 | Problem | Fix |
 |---------|-----|
 | MaixCam not responding after boot | Wait 30s. If still nothing, check if IP changed: `dns-sd -B _http._tcp local` |
-| Orchestrator shows wrong IPs | Ctrl+C and restart — it doesn't hot-reload |
+| Orchestrator shows wrong IPs | Restart service: `ssh imperfecta-pi "sudo systemctl restart orchestrator"` |
 | `curl` to MaixCam returns empty faces | Make sure a face is visible to camera (check for green boxes on MaixCam screen) |
 | WLED not responding | Check it's powered on. Find IP: `dns-sd -B _http._tcp local` |
-| bg removal slow (>5s) | Normal for first request (model loading). Subsequent requests should be ~1.5s |
+| bg removal slow (>5s) | Normal for first request (Replicate cold start). Subsequent requests faster. |
 | Gallery not updating | Check browser console for SSE connection. Refresh the page. |
 | Button not triggering | Check breadboard wiring: red wire → Pi pin 11 (GPIO17), black wire → Pi pin 9 (GND) |
 | Need to update MaixCam script | Plug MaixCam into Mac, push via MaixVision, then `ssh root@10.0.0.14` and run: `cp /tmp/maixpy_run/main.py /maixapp/apps/face_capture_server/main.py` |
-| SSH to Pi asks for key passphrase | Use `-o PubkeyAuthentication=no` flag, or use `deploy.sh` which includes it |
+| Pi not reachable | Check it's on Wi-Fi. Try `ping 10.0.0.206`. If no response, unplug/replug and wait 30s. |
 
 ## File Locations
 
 | File | Location | Runs on |
 |------|----------|---------|
 | face_capture_multi_server.py | `/Users/mheavers/Desktop/imperfecta/_project/maixcam/face_capture/` | MaixCam (auto-starts on boot) |
-| bg_removal_server.py | `/Users/mheavers/Desktop/imperfecta/maixcam/` | Mac |
-| orchestrator.py | Pi: `~/orchestrator.py`. Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/` | Pi |
-| deploy.sh | `/Users/mheavers/Desktop/imperfecta/_project/prototype/` | Mac (deploys orchestrator to Pi) |
+| bg_removal_server.py | Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/`. Pi: `~/bg_removal_server.py` | Pi (Replicate cloud API) |
+| orchestrator.py | Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/`. Pi: `~/orchestrator.py` | Pi |
+| deploy.sh | `/Users/mheavers/Desktop/imperfecta/_project/prototype/` | Mac (deploys all Pi files) |
 | wled_client.py | Pi: `~/wled_client.py`. Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/` | Pi / Mac |
-| gallery.html | `/Users/mheavers/Desktop/imperfecta/maixcam/static/` | Served by bg_removal_server |
+| gallery.html | Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/static/`. Pi: `~/static/gallery.html` | Served by bg_removal_server on Pi |
+| bg_removal.service | `/etc/systemd/system/` on Pi | Pi (systemd) |
+| orchestrator.service | `/etc/systemd/system/` on Pi | Pi (systemd) |
 
-To deploy updated orchestrator to Pi from Mac:
+To deploy all updated files to Pi from Mac:
 ```
 ~/Desktop/imperfecta/_project/prototype/deploy.sh
 ```
-(Asks for Pi password twice — once to copy, once to restart the service.)
+(Passwordless — uses SSH key.)
 
-## Config (all in orchestrator.py on Pi: `~/orchestrator.py`)
+## Config
+
+### orchestrator.py (Pi: `~/orchestrator.py`)
 
 | Setting | Value |
 |---------|-------|
 | MaixCam IP | `MAIXCAM_IP = "10.0.0.14"` |
 | WLED IP | `WLED_IP = "10.0.0.220"` |
-| BG server IP | `BG_SERVER_IP = "10.0.0.18"` |
+| BG server IP | `BG_SERVER_IP = "127.0.0.1"` (localhost — runs on Pi) |
 | Ring duration | `WLED_RING_DURATION = 5.0` |
 | Ambient interval | `WLED_AMBIENT_INTERVAL = 30.0` |
 | Ambient duration | `WLED_AMBIENT_DURATION = 30.0` |
@@ -117,6 +126,13 @@ To deploy updated orchestrator to Pi from Mac:
 | Ambient preset ID | `AMBIENT_PRESET_ID = 2` |
 | GPIO pin | `GPIO_PIN = 17` (physical pin 11) |
 | Cooldown | `COOLDOWN_SECONDS = 3.0` |
+
+### bg_removal.service (environment)
+
+| Setting | Value |
+|---------|-------|
+| Replicate API token | Set in `/etc/systemd/system/bg_removal.service` as `Environment=REPLICATE_API_TOKEN=...` |
+| Replicate model | `cjwbw/rembg` |
 
 ## Architecture
 
@@ -132,10 +148,12 @@ To deploy updated orchestrator to Pi from Mac:
         |    GET /photo ──→ MaixCam returns full frame JPEG
         |         |
         |         v
-        |    POST /remove-bg ──→ Mac bg_removal_server (10.0.0.18:5050)
+        |    POST /remove-bg ──→ Pi bg_removal_server (localhost:5050)
+        |                              ──→ Replicate API (cloud)
         |                              saves PNG, pushes SSE
         |                              v
         |                    Browser gallery shows new photo
+        |                    (http://10.0.0.206:5050/)
         |
         +──→ POST /json/state ──→ WLED (10.0.0.220)
                                   Ring Bell plays 5s, then off
