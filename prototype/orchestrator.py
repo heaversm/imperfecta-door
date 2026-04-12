@@ -202,9 +202,9 @@ def setup_gpio():
     request = gpiod.request_lines(
         "/dev/gpiochip0",
         consumer="orchestrator",
-        config={GPIO_PIN: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP)},
+        config={GPIO_PIN: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_DOWN)},
     )
-    print(f"GPIO {GPIO_PIN} configured via gpiod (pull-up, active LOW)")
+    print(f"GPIO {GPIO_PIN} configured via gpiod (pull-down, active HIGH — touch sensor)")
     return request
 
 
@@ -225,8 +225,8 @@ def run_gpio_loop():
 
     try:
         while True:
-            # Button pressed = LOW (pulled to GND)
-            if request.get_value(GPIO_PIN) == Value.INACTIVE:
+            # Touch sensor outputs HIGH when touched
+            if request.get_value(GPIO_PIN) == Value.ACTIVE:
                 now = time.time()
                 if now - last_trigger >= COOLDOWN_SECONDS:
                     last_trigger = now

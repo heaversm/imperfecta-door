@@ -24,6 +24,13 @@ import queue
 import threading
 import urllib.request
 
+# ── Funhouse distortion config ────────────────────────────────
+DISTORT_ENABLED = True             # set False to disable distortion
+DISTORT_WAVE_AMP_MAX = 15         # max wave amplitude in pixels (0 to this)
+DISTORT_WAVE_FREQ_MAX = 3.0       # max wave frequency (0 to this)
+DISTORT_BULGE_STRENGTH_MAX = 0.3  # max barrel bulge (0 to this)
+# ──────────────────────────────────────────────────────────────
+
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -37,6 +44,46 @@ face_lock = threading.Lock()
 
 sse_clients = []
 sse_lock = threading.Lock()
+
+
+def funhouse_distort(img):
+    """Apply randomized funhouse mirror distortion to a PIL Image (RGBA)."""
+    if not DISTORT_ENABLED:
+        return img
+
+    import random
+    wave_amp = random.uniform(0, DISTORT_WAVE_AMP_MAX)
+    wave_freq = random.uniform(0, DISTORT_WAVE_FREQ_MAX)
+    bulge = random.uniform(0, DISTORT_BULGE_STRENGTH_MAX)
+
+    arr = np.array(img, dtype=np.float64)
+    h, w = arr.shape[:2]
+
+    # Build coordinate grids
+    y_coords, x_coords = np.mgrid[0:h, 0:w]
+
+    # Normalize to -1..1 centered
+    nx = (x_coords - w / 2) / (w / 2)
+    ny = (y_coords - h / 2) / (h / 2)
+
+    # Wave distortion
+    src_x = x_coords + wave_amp * np.sin(wave_freq * np.pi * ny)
+    src_y = y_coords + wave_amp * np.sin(wave_freq * np.pi * nx)
+
+    # Barrel/bulge distortion
+    if bulge > 0.01:
+        r = np.sqrt(nx ** 2 + ny ** 2)
+        r_distorted = r * (1 + bulge * r ** 2)
+        scale = np.where(r > 0, r_distorted / r, 1.0)
+        src_x = (nx * scale) * (w / 2) + w / 2 + wave_amp * np.sin(wave_freq * np.pi * ny)
+        src_y = (ny * scale) * (h / 2) + h / 2 + wave_amp * np.sin(wave_freq * np.pi * nx)
+
+    # Clamp and map
+    src_x = np.clip(src_x, 0, w - 1).astype(np.int32)
+    src_y = np.clip(src_y, 0, h - 1).astype(np.int32)
+    result = arr[src_y, src_x]
+
+    return Image.fromarray(result.astype(np.uint8))
 
 
 def restore_face_list():
@@ -108,6 +155,13 @@ def remove_bg():
 
     # output is a FileOutput object — read it directly
     png_bytes = output.read()
+
+    # Apply funhouse distortion
+    result_img = Image.open(io.BytesIO(png_bytes))
+    result_img = funhouse_distort(result_img)
+    output_buf = io.BytesIO()
+    result_img.save(output_buf, format="PNG")
+    png_bytes = output_buf.getvalue()
 
     # Save result
     filename = f"removed_{timestamp}.png"
