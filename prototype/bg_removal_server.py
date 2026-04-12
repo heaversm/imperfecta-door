@@ -13,6 +13,7 @@ Then open http://<pi-ip>:5050/ in a browser.
 
 from flask import Flask, request, Response, jsonify, send_from_directory
 from PIL import Image
+import numpy as np
 import replicate
 import io
 import os

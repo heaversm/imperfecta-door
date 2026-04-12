@@ -21,8 +21,6 @@
     align-content: flex-start;
     width: 100vw;
     height: 100vh;
-    gap: 0;
-    padding: 0;
     overflow: hidden;
   }
   .face {
@@ -31,7 +29,6 @@
   }
   .face img {
     display: block;
-    height: 25vh;
     width: auto;
     opacity: 0;
     transition: opacity 0.5s ease-in;
@@ -44,16 +41,48 @@
 <body>
 <div id="gallery"></div>
 <script>
+// ── Tweak these ──────────────────────────────────────────────
+const CONFIG = {
+  MAX_FACES: 100,          // max faces on screen before oldest removed
+  FACE_HEIGHT_VH: 25,      // base face height (vh)
+  SIZE_VARIATION: 3,        // +/- vh variation from base height
+  MIN_ROTATION: -15,         // degrees
+  MAX_ROTATION: 15,          // degrees
+  OVERLAP_X_MIN: -100,       // most overlap (px)
+  OVERLAP_X_MAX: -75,        // least overlap (px)
+  OVERLAP_Y_MIN: -20,        // most vertical overlap (px)
+  OVERLAP_Y_MAX: -5,         // least vertical overlap (px)
+  NUDGE_X: 10,              // max random horizontal nudge (px)
+  NUDGE_Y: 10,              // max random vertical nudge (px)
+  FADE_IN_MS: 500,          // fade-in duration (ms)
+};
+// ─────────────────────────────────────────────────────────────
+
 const gallery = document.getElementById('gallery');
+
+function rand(min, max) {
+  return Math.random() * (max - min) + min;
+}
 
 function addFace(filename) {
   const cell = document.createElement('div');
   cell.className = 'face';
   cell.dataset.filename = filename;
 
+  const rotation = rand(CONFIG.MIN_ROTATION, CONFIG.MAX_ROTATION);
+  const height = CONFIG.FACE_HEIGHT_VH + rand(-CONFIG.SIZE_VARIATION, CONFIG.SIZE_VARIATION);
+  const nudgeX = rand(-CONFIG.NUDGE_X, CONFIG.NUDGE_X);
+  const nudgeY = rand(-CONFIG.NUDGE_Y, CONFIG.NUDGE_Y);
+
+  cell.style.marginLeft = rand(CONFIG.OVERLAP_X_MIN, CONFIG.OVERLAP_X_MAX) + 'px';
+  cell.style.marginTop = rand(CONFIG.OVERLAP_Y_MIN, CONFIG.OVERLAP_Y_MAX) + 'px';
+  cell.style.transform = 'rotate(' + rotation + 'deg) translate(' + nudgeX + 'px, ' + nudgeY + 'px)';
+
   const img = document.createElement('img');
   img.src = '/captures/' + filename;
   img.alt = '';
+  img.style.height = height + 'vh';
+  img.style.transition = 'opacity ' + CONFIG.FADE_IN_MS + 'ms ease-in';
   img.onload = () => {
     img.classList.add('loaded');
     trimOverflow();
@@ -63,14 +92,13 @@ function addFace(filename) {
 }
 
 function trimOverflow() {
-  // Remove oldest faces until content fits within the viewport
   while (gallery.scrollHeight > gallery.clientHeight && gallery.children.length > 1) {
     gallery.removeChild(gallery.firstElementChild);
   }
 }
 
 function removeFace(filename) {
-  const cell = gallery.querySelector(`.face[data-filename="${filename}"]`);
+  const cell = gallery.querySelector('.face[data-filename="' + filename + '"]');
   if (cell) cell.remove();
 }
 
