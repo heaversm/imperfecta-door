@@ -50,6 +50,7 @@ RING_PRESET_ID = 1              # WLED preset for ring animation
 AMBIENT_PRESET_ID = 2           # WLED preset for night ambient (future use)
 
 GPIO_PIN = 17                   # BCM pin number (physical pin 11)
+TRIGGER_MODE = "fsr"            # "fsr" = active HIGH (FSR + 10K divider), "button" = active LOW (momentary switch to GND)
 COOLDOWN_SECONDS = 3.0          # Debounce / cooldown between triggers
 REQUEST_TIMEOUT = 10.0          # HTTP request timeout
 WLED_RING_DURATION = 5.0        # Seconds to play ring animation before turning off
@@ -199,12 +200,18 @@ def setup_gpio():
     if gpiod is None:
         return None
 
+    if TRIGGER_MODE == "fsr":
+        bias = Bias.PULL_DOWN
+        print(f"GPIO {GPIO_PIN} configured via gpiod (pull-down, active HIGH — FSR mode)")
+    else:
+        bias = Bias.PULL_UP
+        print(f"GPIO {GPIO_PIN} configured via gpiod (pull-up, active LOW — button mode)")
+
     request = gpiod.request_lines(
         "/dev/gpiochip0",
         consumer="orchestrator",
-        config={GPIO_PIN: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_DOWN)},
+        config={GPIO_PIN: gpiod.LineSettings(direction=Direction.INPUT, bias=bias)},
     )
-    print(f"GPIO {GPIO_PIN} configured via gpiod (pull-down, active HIGH — touch sensor)")
     return request
 
 
@@ -225,8 +232,9 @@ def run_gpio_loop():
 
     try:
         while True:
-            # Touch sensor outputs HIGH when touched
-            if request.get_value(GPIO_PIN) == Value.ACTIVE:
+            # FSR: HIGH when pressed, Button: LOW when pressed
+            trigger_value = Value.ACTIVE if TRIGGER_MODE == "fsr" else Value.INACTIVE
+            if request.get_value(GPIO_PIN) == trigger_value:
                 now = time.time()
                 if now - last_trigger >= COOLDOWN_SECONDS:
                     last_trigger = now

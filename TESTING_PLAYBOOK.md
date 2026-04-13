@@ -87,9 +87,10 @@ python3 /Users/mheavers/Desktop/imperfecta/_project/prototype/wled_client.py --h
 | WLED not responding | Check it's powered on. Find IP: `dns-sd -B _http._tcp local` |
 | bg removal slow (>5s) | Normal for first request (Replicate cold start). Subsequent requests faster. |
 | Gallery not updating | Check browser console for SSE connection. Refresh the page. |
-| Button not triggering | Check breadboard wiring: red wire → Pi pin 11 (GPIO17), black wire → Pi pin 9 (GND) |
+| Button/FSR not triggering | Check wiring. FSR mode: FSR lead 1 → Pi 3.3V (pin 1), FSR lead 2 → GPIO17 (pin 11) + 10K resistor → GND (pin 9). Button mode: button between GPIO17 (pin 11) and GND (pin 9). Check `TRIGGER_MODE` in orchestrator.py matches your hardware. |
 | Need to update MaixCam script | Plug MaixCam into Mac, push via MaixVision, then `ssh root@10.0.0.14` and run: `cp /tmp/maixpy_run/main.py /maixapp/apps/face_capture_server/main.py` |
-| Pi not reachable | Check it's on Wi-Fi. Try `ping 10.0.0.206`. If no response, unplug/replug and wait 30s. |
+| Pi not reachable | Wait 60s — wifi watchdog auto-reconnects every minute. If still down: plug in monitor/keyboard, run `nmcli dev wifi connect "SSID" password "PASS"`. |
+| Pi keeps dropping Wi-Fi | Watchdog cron runs every minute. Check it's installed: `sudo crontab -l` should show `wifi_watchdog.sh`. Check logs: `sudo journalctl -t wifi_watchdog --since "10 min ago"`. |
 
 ## File Locations
 
@@ -103,6 +104,8 @@ python3 /Users/mheavers/Desktop/imperfecta/_project/prototype/wled_client.py --h
 | gallery.html | Source: `/Users/mheavers/Desktop/imperfecta/_project/prototype/static/`. Pi: `~/static/gallery.html` | Served by bg_removal_server on Pi |
 | bg_removal.service | `/etc/systemd/system/` on Pi | Pi (systemd) |
 | orchestrator.service | `/etc/systemd/system/` on Pi | Pi (systemd) |
+| wifi_watchdog.sh | Pi: `~/wifi_watchdog.sh` | Pi (root cron, every minute) |
+| wifi_switch.sh | Pi: `~/wifi_switch.sh` | Pi (manual — switch networks) |
 
 To deploy all updated files to Pi from Mac:
 ```
@@ -125,19 +128,36 @@ To deploy all updated files to Pi from Mac:
 | Ring preset ID | `RING_PRESET_ID = 1` |
 | Ambient preset ID | `AMBIENT_PRESET_ID = 2` |
 | GPIO pin | `GPIO_PIN = 17` (physical pin 11) |
+| Trigger mode | `TRIGGER_MODE = "fsr"` (active HIGH, FSR + 10K divider) or `"button"` (active LOW, momentary switch to GND) |
 | Cooldown | `COOLDOWN_SECONDS = 3.0` |
 
 ### bg_removal.service (environment)
 
 | Setting | Value |
 |---------|-------|
-| Replicate API token | Set in `/etc/systemd/system/bg_removal.service` as `Environment=REPLICATE_API_TOKEN=...` |
+| Replicate API token | Set in `/home/imperfecta/.env` (loaded by systemd `EnvironmentFile`). **Never commit tokens to git.** |
 | Replicate model | `cjwbw/rembg` |
+
+## Wi-Fi Resilience
+
+The Pi has three layers of Wi-Fi resilience:
+
+1. **NetworkManager auto-reconnect** — `autoconnect-retries 0` (infinite retries) is set on the Wi-Fi connection profile. If the network drops, NM will keep trying to reconnect on its own.
+
+2. **wifi_watchdog.sh** — Root cron job runs every minute. Pings 8.8.8.8; if no response, toggles Wi-Fi radio off/on to force a fresh scan and reconnect. Check logs: `sudo journalctl -t wifi_watchdog --since "10 min ago"`.
+
+3. **wifi_switch.sh** — For switching to a new network (e.g., gallery Wi-Fi):
+   ```
+   ssh imperfecta-pi "./wifi_switch.sh 'GallerySSID' 'password'"
+   ```
+   Prints the new IP on success.
+
+To verify watchdog is installed: `ssh imperfecta-pi "sudo crontab -l"` — should show `* * * * * /home/imperfecta/wifi_watchdog.sh`.
 
 ## Architecture
 
 ```
-[Physical button on Pi GPIO17]
+[FSR / button on Pi GPIO17]
         |
         v
   [Pi orchestrator.py]

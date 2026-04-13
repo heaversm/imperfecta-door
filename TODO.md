@@ -4,9 +4,11 @@
 
 BG removal now runs on Pi via Replicate cloud API (`cjwbw/rembg`). Gallery served from Pi at `http://10.0.0.206:5050/`. Both services auto-start on boot via systemd (`orchestrator.service`, `bg_removal.service`). No Mac needed.
 
-## 2. Replace button with doorbell trigger
+## 2. Replace button with doorbell trigger — IN PROGRESS
 
-Swap the breadboard button for the actual museum hardware — a wireless doorbell whose signal the Pi can detect. This likely means wiring the doorbell's receiver to a GPIO pin (or intercepting its RF signal). The orchestrator already treats the button as a generic trigger, so the code change is minimal — it's mostly a hardware/wiring task. Need to identify the doorbell model and figure out how to tap into its output.
+FSR (force-sensitive resistor) is wired and working as of 2026-04-13. Wiring: FSR lead 1 → Pi 3.3V (pin 1), FSR lead 2 → GPIO17 (pin 11) + 10K resistor → GND (pin 9). `TRIGGER_MODE = "fsr"` in orchestrator.py.
+
+Remaining: mount FSR onto the physical doorbell button at the museum. May need to solder onto perfboard for durability. See DOORBELL_OPTIONS.md and DOORBELL_WIRING.md for details.
 
 ## 3. LED tubing test
 
@@ -16,6 +18,10 @@ Test the LED strip inside diffuser tubing to validate the visual effect. The cur
 
 The final installation needs 4 LED strands total: 2 pairs running in parallel, each pair connected via an extension strip. This means configuring the Dig-Quad's multiple outputs and making sure WLED addresses all 4 strands correctly (segment config in WLED). Physical wiring: each Dig-Quad output drives 2 strips daisy-chained with an extension cable between them.
 
-## 5. Photo filter / funhouse effect
+## ~~5. Photo filter / funhouse effect~~ DONE
 
-Apply a visual distortion to captured photos so people aren't directly identifiable — something playful like a funhouse mirror warp, fisheye, swirl, or painterly effect. This would happen in the bg removal pipeline (either on the server side after rembg, or as a new processing step). Options include OpenCV distortion maps, PIL/Pillow transforms, or a lightweight style-transfer model. The effect should be consistent and fun, not creepy.
+Funhouse distortion (wave + barrel/bulge) applied in bg_removal_server.py using PIL/numpy. Randomized parameters per image (0 to max for wave amplitude, frequency, and bulge strength). Gallery layout uses overlapping, slightly rotated faces.
+
+## ~~6. Wi-Fi resilience~~ DONE
+
+Three layers: NetworkManager infinite retries (`autoconnect-retries 0`), wifi_watchdog.sh cron (pings every minute, toggles radio if down), wifi_switch.sh for easy network changes. See TESTING_PLAYBOOK.md Wi-Fi Resilience section.

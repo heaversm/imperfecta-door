@@ -126,6 +126,10 @@ The doorbell is indoors at a museum. The Pi orchestrator already listens on GPIO
 
 ## Recommendation
 
-**Go with Option 1 (TTP223 + copper tape).** It's the most reliable for an indoor museum setting, thinnest profile, no wear-out, and the fallback is built in — the doorbell always rings even if the Pi side fails. Order a TTP223 pack and you're set.
+**Using Option 3 (FSR).** Tested and working as of 2026-04-13. Initial failure was due to Pi Wi-Fi dropping, not the FSR itself.
 
-If you want to prototype today with parts on hand, try **Option 2 (piezo)** — just know it may need a small protection circuit and code tweaks for the short pulse.
+Wiring: FSR lead 1 → Pi 3.3V (pin 1), FSR lead 2 → Pi GPIO17 (pin 11) + 10K resistor → Pi GND (pin 9).
+
+To switch between FSR and button, change `TRIGGER_MODE` in orchestrator.py config section:
+- `"fsr"` (default) — active HIGH, for FSR + 10K voltage divider
+- `"button"` — active LOW, for momentary switch to GND
