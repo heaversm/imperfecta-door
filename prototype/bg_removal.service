@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User=imperfecta
 WorkingDirectory=/home/imperfecta
-Environment=REPLICATE_API_TOKEN=r8_d05AZX2VMArOuXehBCviCUOh5RBWMM34CGKzZ
+EnvironmentFile=/home/imperfecta/.env
 ExecStart=/usr/bin/python3 /home/imperfecta/bg_removal_server.py
 Restart=on-failure
 RestartSec=5
