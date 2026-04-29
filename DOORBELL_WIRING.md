@@ -42,6 +42,29 @@ This is a voltage divider. When not pressed, the 10K resistor pulls GPIO17 to GN
 
 ---
 
+## Option C: 433MHz RF Receiver (RX470C-V01)
+
+### Parts
+- RX470C-V01 receiver module
+- Coil spring antenna (push into ANT pin)
+- 3 jumper wires
+
+### Wiring
+
+```
+Receiver pin 2 (GND)      → Pi GND (physical pin 6)
+Receiver pin 3 (VIN)      → Pi 5V  (physical pin 4)
+Receiver pin 4 (DO DATA)  → Pi GPIO17 (physical pin 11)
+Receiver pin 1 (ANT)      → coil antenna (not connected to Pi)
+Receiver pin 5 (DO DATA)  → leave unconnected
+Receiver pin 6 (GND)      → leave unconnected
+```
+
+### Testing
+See rf_test.py and rf_debug.py in prototype/ directory.
+
+---
+
 ## Option B: Touch Sensor (Grove Touch V1.1) + Copper Tape
 
 ### Parts

@@ -50,7 +50,13 @@ RING_PRESET_ID = 1              # WLED preset for ring animation
 AMBIENT_PRESET_ID = 2           # WLED preset for night ambient (future use)
 
 GPIO_PIN = 17                   # BCM pin number (physical pin 11)
-TRIGGER_MODE = "fsr"            # "fsr" = active HIGH (FSR + 10K divider), "button" = active LOW (momentary switch to GND)
+TRIGGER_MODE = "rf"             # "rf" = 433MHz burst detection (Avantek), "fsr" = active HIGH (FSR + 10K divider), "button" = active LOW
+# RF burst detection: we don't decode bits — we fingerprint the Avantek's burst envelope.
+# Calibrated 2026-04-28: Avantek presses produced 329-343 edges, 237-252ms duration;
+# largest noise burst was 138 edges, 98ms. Threshold is set with comfortable margin.
+RF_SYNC_MIN_US = 5000           # gap > this ends a burst
+RF_BURST_MIN_EDGES = 250        # min edges to count as Avantek (presses run 329+)
+RF_BURST_MIN_DURATION_MS = 150  # min duration ms (presses run 237+)
 COOLDOWN_SECONDS = 3.0          # Debounce / cooldown between triggers
 REQUEST_TIMEOUT = 10.0          # HTTP request timeout
 WLED_RING_DURATION = 5.0        # Seconds to play ring animation before turning off
@@ -196,27 +202,84 @@ def handle_button_press():
 
 
 def setup_gpio():
-    """Request the button line via gpiod v2 with pull-up bias."""
+    """Request the button line via gpiod v2."""
     if gpiod is None:
         return None
 
-    if TRIGGER_MODE == "fsr":
+    if TRIGGER_MODE == "rf":
+        from gpiod.line import Edge
         bias = Bias.PULL_DOWN
+        config = gpiod.LineSettings(direction=Direction.INPUT, bias=bias, edge_detection=Edge.BOTH)
+        print(f"GPIO {GPIO_PIN} configured via gpiod (edge detection — RF mode)")
+    elif TRIGGER_MODE == "fsr":
+        config = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_DOWN)
         print(f"GPIO {GPIO_PIN} configured via gpiod (pull-down, active HIGH — FSR mode)")
     else:
-        bias = Bias.PULL_UP
+        config = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP)
         print(f"GPIO {GPIO_PIN} configured via gpiod (pull-up, active LOW — button mode)")
 
     request = gpiod.request_lines(
         "/dev/gpiochip0",
         consumer="orchestrator",
-        config={GPIO_PIN: gpiod.LineSettings(direction=Direction.INPUT, bias=bias)},
+        config={GPIO_PIN: config},
+        event_buffer_size=512,
     )
     return request
 
 
+def run_rf_loop():
+    """Main loop: detect Avantek RF burst envelope on GPIO17 (no bit decoding) and trigger."""
+    if gpiod is None:
+        print("No GPIO available. Use --test flag for manual trigger.")
+        return
+
+    request = setup_gpio()
+    if request is None:
+        return
+
+    print(f"\nListening for Avantek RF bursts on GPIO {GPIO_PIN}...")
+    print(f"Trigger when burst has edges >= {RF_BURST_MIN_EDGES} and duration >= {RF_BURST_MIN_DURATION_MS}ms")
+    print("Press Ctrl+C to exit\n")
+
+    last_trigger = 0.0
+    last_time_ns = None
+    burst_gaps_us = []
+
+    try:
+        while True:
+            for event in request.read_edge_events(max_events=512):
+                now_ns = event.timestamp_ns
+                if last_time_ns is None:
+                    last_time_ns = now_ns
+                    continue
+
+                gap_us = (now_ns - last_time_ns) // 1000
+                last_time_ns = now_ns
+
+                if gap_us >= RF_SYNC_MIN_US:
+                    edges = len(burst_gaps_us)
+                    duration_ms = sum(burst_gaps_us) // 1000
+                    if edges >= RF_BURST_MIN_EDGES and duration_ms >= RF_BURST_MIN_DURATION_MS:
+                        now = time.time()
+                        if now - last_trigger >= COOLDOWN_SECONDS:
+                            last_trigger = now
+                            print(f"  RF burst MATCH (edges={edges}, dur={duration_ms}ms) — triggering")
+                            handle_button_press()
+                        else:
+                            remaining = COOLDOWN_SECONDS - (now - last_trigger)
+                            print(f"  RF burst MATCH (edges={edges}, dur={duration_ms}ms) — cooldown {remaining:.1f}s")
+                    burst_gaps_us = []
+                else:
+                    burst_gaps_us.append(gap_us)
+
+    except KeyboardInterrupt:
+        print("\nShutting down")
+    finally:
+        request.release()
+
+
 def run_gpio_loop():
-    """Main loop: poll GPIO button with debounce/cooldown."""
+    """Main loop: poll GPIO for FSR or button trigger."""
     if gpiod is None:
         print("No GPIO available. Use --test flag for manual trigger.")
         return
@@ -232,7 +295,6 @@ def run_gpio_loop():
 
     try:
         while True:
-            # FSR: HIGH when pressed, Button: LOW when pressed
             trigger_value = Value.ACTIVE if TRIGGER_MODE == "fsr" else Value.INACTIVE
             if request.get_value(GPIO_PIN) == trigger_value:
                 now = time.time()
@@ -243,7 +305,7 @@ def run_gpio_loop():
                     remaining = COOLDOWN_SECONDS - (now - last_trigger)
                     print(f"  Cooldown: {remaining:.1f}s remaining")
 
-            time.sleep(0.05)  # 50ms polling interval
+            time.sleep(0.05)
 
     except KeyboardInterrupt:
         print("\nShutting down")
@@ -270,6 +332,8 @@ def run_test_mode():
 def main():
     if "--test" in sys.argv:
         run_test_mode()
+    elif TRIGGER_MODE == "rf":
+        run_rf_loop()
     else:
         run_gpio_loop()
 
