@@ -38,10 +38,16 @@ except ImportError:
     print("WARNING: gpiod not available — running in dev mode (no GPIO)")
 
 # ── Config ──────────────────────────────────────────────────────────
-MAIXCAM_IP = "10.0.0.14"       # MaixCam (Wi-Fi)
-MAIXCAM_PORT = 8080
+# === LOCATION CONFIG: comment one block, uncomment the other when swapping ===
+# --- HOME ---
+# MAIXCAM_IP = "10.0.0.14"
+# WLED_IP    = "10.0.0.220"
+# --- GALLERY ---
+MAIXCAM_IP = "10.1.10.14"
+WLED_IP    = "10.1.10.221"
+# === /LOCATION CONFIG ===
 
-WLED_IP = "10.0.0.220"          # WLED controller (Dig-Quad)
+MAIXCAM_PORT = 8080
 
 BG_SERVER_IP = "127.0.0.1"     # bg_removal_server.py runs locally on Pi
 BG_SERVER_PORT = 5050
@@ -52,12 +58,15 @@ AMBIENT_PRESET_ID = 2           # WLED preset for night ambient (future use)
 GPIO_PIN = 17                   # BCM pin number (physical pin 11)
 TRIGGER_MODE = "rf"             # "rf" = 433MHz burst detection (Avantek), "fsr" = active HIGH (FSR + 10K divider), "button" = active LOW
 # RF burst detection: we don't decode bits — we fingerprint the Avantek's burst envelope.
-# Calibrated 2026-04-28: Avantek presses produced 329-343 edges, 237-252ms duration;
-# largest noise burst was 138 edges, 98ms. Threshold is set with comfortable margin.
+# Calibrated 2026-04-29: Avantek presses are 329-343 edges / 237-252ms.
+# A periodic 433MHz transmitter (likely a neighbor's weather sensor) fires exactly
+# every 57s at 909 edges / 900-950ms — bigger than Avantek, so we cap on the high end too.
 RF_SYNC_MIN_US = 5000           # gap > this ends a burst
-RF_BURST_MIN_EDGES = 250        # min edges to count as Avantek (presses run 329+)
-RF_BURST_MIN_DURATION_MS = 150  # min duration ms (presses run 237+)
-COOLDOWN_SECONDS = 3.0          # Debounce / cooldown between triggers
+RF_BURST_MIN_EDGES = 250        # presses run 329+, with margin
+RF_BURST_MAX_EDGES = 500        # rejects the 909-edge periodic transmitter
+RF_BURST_MIN_DURATION_MS = 150  # presses run 237+, with margin
+RF_BURST_MAX_DURATION_MS = 400  # rejects the ~950ms periodic transmitter
+COOLDOWN_SECONDS = 5.0          # Debounce / cooldown between triggers; matches WLED_RING_DURATION to avoid ring-thread races
 REQUEST_TIMEOUT = 10.0          # HTTP request timeout
 WLED_RING_DURATION = 5.0        # Seconds to play ring animation before turning off
 WLED_AMBIENT_INTERVAL = 30.0    # Seconds between ambient animation triggers
@@ -238,7 +247,7 @@ def run_rf_loop():
         return
 
     print(f"\nListening for Avantek RF bursts on GPIO {GPIO_PIN}...")
-    print(f"Trigger when burst has edges >= {RF_BURST_MIN_EDGES} and duration >= {RF_BURST_MIN_DURATION_MS}ms")
+    print(f"Trigger when {RF_BURST_MIN_EDGES} <= edges <= {RF_BURST_MAX_EDGES} and {RF_BURST_MIN_DURATION_MS}ms <= duration <= {RF_BURST_MAX_DURATION_MS}ms")
     print("Press Ctrl+C to exit\n")
 
     last_trigger = 0.0
@@ -259,7 +268,9 @@ def run_rf_loop():
                 if gap_us >= RF_SYNC_MIN_US:
                     edges = len(burst_gaps_us)
                     duration_ms = sum(burst_gaps_us) // 1000
-                    if edges >= RF_BURST_MIN_EDGES and duration_ms >= RF_BURST_MIN_DURATION_MS:
+                    in_edge_range = RF_BURST_MIN_EDGES <= edges <= RF_BURST_MAX_EDGES
+                    in_dur_range = RF_BURST_MIN_DURATION_MS <= duration_ms <= RF_BURST_MAX_DURATION_MS
+                    if in_edge_range and in_dur_range:
                         now = time.time()
                         if now - last_trigger >= COOLDOWN_SECONDS:
                             last_trigger = now
@@ -268,6 +279,9 @@ def run_rf_loop():
                         else:
                             remaining = COOLDOWN_SECONDS - (now - last_trigger)
                             print(f"  RF burst MATCH (edges={edges}, dur={duration_ms}ms) — cooldown {remaining:.1f}s")
+                    elif edges >= RF_BURST_MIN_EDGES:
+                        # Big enough to be a candidate but failed shape — log for debug
+                        print(f"  RF burst REJECTED (edges={edges}, dur={duration_ms}ms) — outside Avantek envelope")
                     burst_gaps_us = []
                 else:
                     burst_gaps_us.append(gap_us)

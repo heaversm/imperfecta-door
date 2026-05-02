@@ -4,33 +4,29 @@
 
 BG removal now runs on Pi via Replicate cloud API (`cjwbw/rembg`). Gallery served from Pi at `http://10.0.0.206:5050/`. Both services auto-start on boot via systemd (`orchestrator.service`, `bg_removal.service`). No Mac needed.
 
-## 2. Doorbell trigger — IN PROGRESS
+## ~~2. Doorbell trigger~~ DONE
 
-FSR (force-sensitive resistor) is wired and working as of 2026-04-13. Wiring: FSR lead 1 → Pi 3.3V (pin 1), FSR lead 2 → GPIO17 (pin 11) + 10K resistor → GND (pin 9). `TRIGGER_MODE = "fsr"` in orchestrator.py.
+Triggering on **433MHz RF burst envelope detection** (no bit decoding) as of 2026-04-29.
 
-**Two options under consideration:**
+The Avantek D3-B uses a proprietary RF protocol that we couldn't decode reliably. Instead, we fingerprint the burst envelope — the Pi notices that *any* burst with the Avantek's shape happened. Since we have a 433MHz receiver wired to GPIO17 already, and we don't actually need to read the bits — we just need to know a press happened.
 
-### Option A: FSR (current working prototype)
-- Fabricate a housing that adheres the FSR to the doorbell button face while hiding the wires running from the FSR back to the Pi
-- Solder FSR circuit onto perfboard for durability
-- Requires running 2 thin wires from exterior doorbell back indoors to Pi GPIO
-- Pro: already working and tested. Con: exterior wiring.
+**Wiring (current):** RX470C-V01 module on the Pi
+- Receiver pin 2 (GND) → Pi pin 6
+- Receiver pin 3 (VIN) → Pi pin 4 (5V)
+- Receiver pin 4 (DATA) → Pi pin 11 (GPIO17)
+- Receiver pin 1 (ANT) → soldered coil antenna (32cm spiral)
 
-### Option B: 433MHz RF receiver (no exterior wires) — IN PROGRESS
-- RX470C-V01 receiver module purchased and wired to Pi GPIO17
-- Wiring: receiver pin 2 (GND) → Pi pin 6, pin 3 (VIN) → Pi pin 4 (5V), pin 4 (DATA) → Pi pin 11 (GPIO17)
-- Doorbell signal confirmed captured — bursts 52-56 in rf_test.py output show clean OOK pattern
-- Decoded 32-bit code: `11001000000000001100000010100111`
-- orchestrator.py updated with `TRIGGER_MODE = "rf"` and full RF decode/match logic
-- **NOT YET WORKING END-TO-END** — deployed to Pi but no match triggered on doorbell press
-- Next step: debug why orchestrator isn't matching. Possible causes:
-  - Bit decoding off-by-one or wrong edge direction being counted
-  - Code may need to be re-verified (run rf_test.py, capture 3+ consecutive bursts, confirm bits are identical)
-  - Try printing raw decoded codes in the orchestrator to compare against RF_DOORBELL_CODE
+**How it works:** orchestrator.py `run_rf_loop()` watches GPIO17 edge events, splits into bursts on a sync gap, and triggers when a burst envelope falls in the calibrated Avantek range.
 
-**Decision:** RF is preferred if it can be made reliable (eliminates all exterior wiring).
+**Calibrated thresholds (see config in orchestrator.py):**
+- 250 ≤ edges ≤ 500 (Avantek presses run 329-343)
+- 150ms ≤ duration ≤ 400ms (Avantek presses run 237-252ms)
 
-See DOORBELL_OPTIONS.md and DOORBELL_WIRING.md for details.
+The upper bound rejects a periodic 433MHz transmitter in the area (likely a neighbor's weather sensor) that fires every 57s at ~909 edges / ~950ms. Below-range and above-range bursts get logged as `RF burst REJECTED` for debugging.
+
+**Site layout: zero exterior wiring.** The doorbell is the existing Avantek, untouched. Owner notification still works through the Avantek's own plug-in chime. No FSR, no copper tape, no microswitch — the receiver lives indoors on the Pi and intercepts the existing doorbell's own RF transmission.
+
+**Diagnostic tooling:** `prototype/rf_burst_probe.py` is the standalone calibration script — stop the orchestrator, run the probe, press the doorbell N times, observe burst signatures. Useful if the calibration ever drifts (different doorbell, new periodic noise source) and the thresholds need re-tuning.
 
 ### Site layout plan (draft)
 

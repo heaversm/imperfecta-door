@@ -126,10 +126,15 @@ The doorbell is indoors at a museum. The Pi orchestrator already listens on GPIO
 
 ## Recommendation
 
-**Using Option 3 (FSR).** Tested and working as of 2026-04-13. Initial failure was due to Pi Wi-Fi dropping, not the FSR itself.
+**Using Option 4 (RF receiver) with burst-envelope detection** as of 2026-04-29.
 
-Wiring: FSR lead 1 → Pi 3.3V (pin 1), FSR lead 2 → Pi GPIO17 (pin 11) + 10K resistor → Pi GND (pin 9).
+Initial attempts to decode the Avantek's bit-level RF code failed — the protocol is proprietary and no library decodes it reliably. The breakthrough: we don't need to decode. We just need to know a burst happened. The Pi watches GPIO17 edge events, splits bursts on sync gaps, and triggers when a burst's edge count + duration fall in the Avantek's calibrated envelope (329-343 edges / 237-252ms; we trigger on 250-500 edges / 150-400ms).
 
-To switch between FSR and button, change `TRIGGER_MODE` in orchestrator.py config section:
-- `"fsr"` (default) — active HIGH, for FSR + 10K voltage divider
-- `"button"` — active LOW, for momentary switch to GND
+A periodic 433MHz transmitter in range (probably a neighbor's weather sensor, fires every 57s at 909 edges / 950ms) made an upper bound necessary — without it, we got one false trigger per minute.
+
+Wiring is in DOORBELL_WIRING.md "Option C". The FSR (Option 3) is no longer in use.
+
+`TRIGGER_MODE` in orchestrator.py:
+- `"rf"` (current) — RF burst-envelope detection
+- `"fsr"` — kept as a fallback, active HIGH for FSR + 10K voltage divider
+- `"button"` — kept as a fallback, active LOW for momentary switch to GND

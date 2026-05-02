@@ -22,7 +22,13 @@ Existing doorbell (Avantek D3-B, 433MHz wireless) must continue to work normally
 - **12V Mean Well PSU** with fused distribution
 - **Avantek D3-B wireless doorbell** — existing, 433MHz, proprietary protocol, plug-in chime unit elsewhere in the gallery
 
-## Doorbell trigger — the open question
+## Doorbell trigger — RESOLVED 2026-04-29
+
+**Current approach: 433MHz RF burst-envelope detection.** The Avantek's RF protocol is proprietary and we couldn't decode it. But we don't need to — we just need to know a press happened. The Pi watches GPIO17 edge events from the RX470C-V01 receiver, splits bursts on sync gaps, and triggers when a burst's shape (250-500 edges, 150-400ms duration) matches the Avantek's calibrated envelope. Upper bound rejects a periodic 909-edge transmitter in the area. Visitors press the existing Avantek doorbell as normal — chime rings (owner notified) and Pi triggers (lights + camera). One button, no exterior wiring, no modifications to the doorbell.
+
+The history of how we got here is below for context.
+
+## Doorbell trigger — the original open question
 
 The doorbell trigger is the last unsolved piece. Context:
 

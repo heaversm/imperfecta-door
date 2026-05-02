@@ -1,8 +1,10 @@
 # Doorbell Trigger — The Plan
 
+> **STATUS (2026-04-29): SUPERSEDED.** This document explored FSR-based triggering. It's no longer the active approach. The current solution is **433MHz RF burst-envelope detection** via the existing RX470C-V01 receiver — see TODO.md item #2 and DOORBELL_OPTIONS.md "Recommendation". The FSR backup wiring below is kept here for reference only, in case we ever revisit.
+
 The trigger is the sensor that detects "someone pressed the doorbell" and tells the Pi orchestrator to fire the camera + LEDs.
 
-**Currently using:** FSR (force-sensitive resistor) on a breadboard. Working but janky. Goal: get rid of the breadboard, make it solid.
+**Was using (now superseded):** FSR (force-sensitive resistor) on a breadboard. Worked when contact was reliable, but breadboard jumpers wiggle and FSR tabs are heat-sensitive (can't be soldered without damage). The RF burst approach replaces this entirely.
 
 ---
 
