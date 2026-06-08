@@ -4,6 +4,39 @@ Step-by-step for moving the system from the home test bench to the gallery, supp
 
 ---
 
+## ⚡ Quick venue switch (CURRENT — supersedes §1–2 below)
+
+> The networking model changed (2026-06): devices are addressed by **mDNS hostname**
+> (no more hand-editing IPs), the Pi + MaixCam **auto-join both networks**, and WLED
+> is switched with a **script**. The older §1–2 details (AP dance, hardcoded-IP swap,
+> "WLED two networks") are stale — use this section.
+
+**Before you leave (while still on the current network):**
+```bash
+ssh imperfecta-pi '~/wled_switch.sh gallery'   # or 'home' — WLED holds ONE network, so pre-point it
+```
+
+**At the venue:** just power everything on.
+- **Pi** auto-joins (`VIRUSDETECTED` + `gallery-2.4` both saved).
+- **MaixCam** auto-joins (both in `/boot/wpa_supplicant.conf`).
+- **WLED** joins whatever `wled_switch.sh` last set.
+
+**Confirm everything's reachable:**
+```bash
+cd ~/Desktop/imperfecta/_project/prototype && ./smoke_test.sh
+```
+
+**Daily ops:**
+```bash
+ssh imperfecta-pi '~/kiosk'                                  # relaunch fullscreen display
+ssh imperfecta-pi '~/kiosk stop'                             # close it
+ssh imperfecta-pi 'curl -s -X POST http://localhost:5050/trigger'   # fire a capture manually
+ssh imperfecta-pi 'sudo journalctl -u orchestrator -f'      # watch doorbell triggers live
+```
+MaixCam access (through the Pi): `ssh -J imperfecta-pi -i ~/.ssh/id_imperfecta root@<maixcam-ip>`.
+
+---
+
 ## 0. Before you leave home — checklist
 
 - [ ] Pi (with breadboard + RX470C-V01 receiver wired, antenna soldered)
@@ -63,15 +96,21 @@ ssh imperfecta-pi "curl -m 10 http://NEW_MAIXCAM_IP:8080/capture-all"
 
 ### 1c. Switch the WLED Dig-Quad to gallery Wi-Fi
 
-WLED supports two saved networks out of the box:
-1. Power on the Dig-Quad. If it can't reach a saved network within ~30s, it falls back to AP mode (SSID `WLED-AP`, password `wled1234`).
-2. Join `WLED-AP` from your laptop, browse to `http://4.3.2.1`.
-3. Settings → Wi-Fi → enter gallery SSID + password (you can keep your home Wi-Fi as the backup network in the same config).
-4. Save. WLED reboots and joins the gallery network.
+> ⚠️ CORRECTED 2026-06: this WLED build holds **only ONE** network (not two). Use the
+> `wled_switch.sh` script instead of the AP dance below. The script + the constant mDNS
+> name (`wled-dig-quad-v3.local`) is the supported path.
 
-Find its new IP from the Pi:
 ```bash
-ssh imperfecta-pi "arp -a | grep -i 'esp\|wled'"
+# Run on the Pi WHILE WLED is still reachable on the current network, then move venues:
+ssh imperfecta-pi '~/wled_switch.sh gallery'   # or 'home'
+```
+WLED reboots and joins that network. Creds live in `~/.venue_wifi.env` on the Pi.
+
+Fallback recovery (if WLED is stranded off-network): power-cycle the Dig-Quad; if it
+can't find its saved network it opens `WLED-AP` (password `wled1234`) → browse to
+`http://4.3.2.1` → Settings → WiFi to fix it. Find its IP from the Pi:
+```bash
+ssh imperfecta-pi "for i in \$(seq 1 254); do curl -s --connect-timeout 1 http://10.0.0.\$i/json/info 2>/dev/null | grep -q WLED && echo 10.0.0.\$i; done"
 ```
 
 ### 1d. Update the orchestrator's hardcoded IPs
@@ -118,9 +157,9 @@ Open the gallery in a browser at `http://NEW_PI_IP:5050/`. New face should appea
 
 NetworkManager profiles persist on the Pi. Once you've connected to both networks, **the Pi auto-picks whichever is in range** when it boots. No manual switching needed — bring the Pi home, it joins your home network; bring it to the gallery, it joins the gallery network.
 
-WLED also supports two saved networks (primary + backup), configured in Settings → Wi-Fi.
+WLED does **NOT** hold two networks (confirmed 2026-06) — switch it with `~/wled_switch.sh home|gallery` on the Pi before moving (see the Quick venue switch section up top).
 
-The MaixCam may or may not support multiple saved networks — depends on firmware. If it doesn't, you'll have to reconfigure it each time you swap locations.
+The MaixCam holds both networks in `/boot/wpa_supplicant.conf` (gallery priority 10, home 5) and auto-joins whichever is in range — no manual switching.
 
 To list the Pi's saved Wi-Fi profiles:
 ```bash
@@ -287,7 +326,7 @@ Gallery URL (open in browser): `http://<PI_IP>:5050/`
 
 ## 7. When you go home from the gallery
 
-The Pi auto-reconnects to your home Wi-Fi when in range (NetworkManager remembers profiles). MaixCam may need manual reconfig depending on its firmware. WLED — if you saved your home Wi-Fi as the backup network in Settings, it auto-falls-back.
+The Pi and MaixCam auto-reconnect to home Wi-Fi when in range (both hold both networks). WLED holds only one — run `ssh imperfecta-pi '~/wled_switch.sh home'` before leaving the gallery so it joins home on arrival.
 
 You'll need to update `orchestrator.py`'s `MAIXCAM_IP` and `WLED_IP` to whatever those devices got from your home router. `arp -a` from the Pi will show you. Then `./deploy.sh`.
 
