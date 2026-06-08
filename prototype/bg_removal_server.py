@@ -15,6 +15,7 @@ from flask import Flask, request, Response, jsonify, send_from_directory
 from PIL import Image
 import numpy as np
 import replicate
+import httpx
 import io
 import os
 import time
@@ -147,14 +148,24 @@ def remove_bg():
     timestamp = int(time.time())
     img.save(os.path.join(SAVE_DIR, f"original_{timestamp}.jpg"))
 
-    # Send to Replicate for bg removal
-    output = replicate.run(
-        "cjwbw/rembg:fb8af171cfa1616ddcf1242c093f9c46bcada5ad4cf6f2fbe8b81b330ec5c003",
-        input={"image": io.BytesIO(img_bytes)},
-    )
-
-    # output is a FileOutput object — read it directly
-    png_bytes = output.read()
+    # Send to Replicate for bg removal — retry on transient network failures
+    # (gallery Wi-Fi has hit DNS hiccups; one retry is usually enough)
+    last_err = None
+    for attempt in range(3):
+        try:
+            output = replicate.run(
+                "cjwbw/rembg:fb8af171cfa1616ddcf1242c093f9c46bcada5ad4cf6f2fbe8b81b330ec5c003",
+                input={"image": io.BytesIO(img_bytes)},
+            )
+            png_bytes = output.read()
+            break
+        except (httpx.RequestError, OSError) as e:
+            last_err = e
+            wait = 2 ** attempt
+            print(f"Replicate attempt {attempt + 1}/3 failed ({type(e).__name__}: {e}); retrying in {wait}s")
+            time.sleep(wait)
+    else:
+        raise last_err
 
     # Apply funhouse distortion
     result_img = Image.open(io.BytesIO(png_bytes))

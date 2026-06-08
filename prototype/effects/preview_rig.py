@@ -1,0 +1,316 @@
+"""Mac-side sandbox for previewing the Imperfecta effects.
+
+Run it, open http://localhost:8000, hit CAPTURE. Webcam grabs a ~2 sec burst,
+all effects render with multiple parameter variants, results display in a grid
+with per-effect timings.
+
+  pip install -r requirements.txt
+  python preview_rig.py
+
+First run will trigger macOS camera permission prompt — grant Terminal access.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+import webbrowser
+from pathlib import Path
+
+import cv2
+from flask import Flask, jsonify, render_template_string, send_from_directory
+from PIL import Image
+
+import effects
+
+# ─── Config ────────────────────────────────────────────────────────────────
+BURST_FRAMES = 30        # how many frames per capture
+BURST_DURATION = 2.0     # target wall-clock seconds for the burst
+CAMERA_INDEX = 0         # 0 = default Mac webcam
+CAPTURE_WIDTH = 1280     # request from camera (camera picks closest supported)
+CAPTURE_HEIGHT = 720
+PORT = 8000
+# ───────────────────────────────────────────────────────────────────────────
+
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+app = Flask(__name__)
+_cap_lock = threading.Lock()
+_cap = None
+
+
+def init_camera():
+    """Open the webcam once at startup and warm it up."""
+    global _cap
+    _cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not _cap.isOpened():
+        raise RuntimeError(
+            f"Could not open webcam {CAMERA_INDEX}. "
+            "On macOS check System Settings → Privacy & Security → Camera."
+        )
+    _cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
+    _cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
+    # First few frames are often black or auto-exposing — discard them
+    for _ in range(5):
+        _cap.read()
+    actual_w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Webcam ready: {actual_w}x{actual_h}")
+
+
+def capture_burst(n: int = BURST_FRAMES) -> list[Image.Image]:
+    """Grab N frames from the webcam, return as PIL Images (RGB)."""
+    frames = []
+    interval = BURST_DURATION / n
+    with _cap_lock:
+        t_next = time.perf_counter()
+        for _ in range(n):
+            ret, bgr = _cap.read()
+            if not ret:
+                continue
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            frames.append(Image.fromarray(rgb))
+            # Sleep until next slot (rough pacing — camera FPS may cap us anyway)
+            t_next += interval
+            sleep = t_next - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+    return frames
+
+
+def run_all_effects(frames: list[Image.Image]) -> list[dict]:
+    """Run every effect (with param sweeps) and return metadata."""
+    results = []
+    middle_frame = frames[len(frames) // 2]
+
+    def record(name: str, image_and_ms):
+        img, ms = image_and_ms
+        results.append({"name": name, "image": img, "ms": ms})
+
+    # v1 palette — the effects that will ship to the Pi.
+    record("Slitscan vertical", effects.slitscan_vertical(frames))
+    record("Slitscan horizontal", effects.slitscan_horizontal(frames))
+    record("Echo max blend", effects.echo_max(frames))
+    record("Time grid 8x6", effects.time_grid(frames, rows=8, cols=6))
+    record(
+        "Hockney 3x3 chunky",
+        effects.hockney_joiner(
+            frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10
+        ),
+    )
+    record(
+        "Liquify extreme",
+        effects.liquify(middle_frame, wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45),
+    )
+    record("Warhol pop", effects.warhol(frames))
+    record("Lichtenstein", effects.lichtenstein(frames))
+    record("Mondrian", effects.mondrian(frames))
+
+    return results
+
+
+@app.route("/")
+def viewer():
+    return render_template_string(VIEWER_HTML)
+
+
+@app.route("/capture", methods=["POST"])
+def capture():
+    timestamp = int(time.time())
+    session_dir = OUTPUT_DIR / str(timestamp)
+    session_dir.mkdir(exist_ok=True)
+
+    t0 = time.perf_counter()
+    frames = capture_burst()
+    capture_ms = (time.perf_counter() - t0) * 1000
+
+    # Save the middle source frame too — handy for re-running effects offline
+    middle_idx = len(frames) // 2
+    frames[middle_idx].save(session_dir / "_source_middle.jpg", quality=85)
+
+    results = run_all_effects(frames)
+
+    payload = []
+    for r in results:
+        filename = f"{r['name'].replace(' ', '_').replace('(', '').replace(')', '')}.jpg"
+        r["image"].save(session_dir / filename, quality=88)
+        payload.append({
+            "name": r["name"],
+            "url": f"/output/{timestamp}/{filename}",
+            "ms": round(r["ms"], 1),
+        })
+
+    return jsonify({
+        "session": timestamp,
+        "capture_ms": round(capture_ms, 1),
+        "n_frames": len(frames),
+        "results": payload,
+        "source_url": f"/output/{timestamp}/_source_middle.jpg",
+    })
+
+
+@app.route("/output/<session>/<filename>")
+def serve_output(session, filename):
+    return send_from_directory(OUTPUT_DIR / session, filename)
+
+
+VIEWER_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Imperfecta — effects preview</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #111;
+    color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 24px;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 24px;
+  }
+  h1 { font-size: 20px; margin: 0; font-weight: 500; }
+  button {
+    background: #c33; color: white; border: 0;
+    padding: 12px 24px; font-size: 16px; border-radius: 6px;
+    cursor: pointer; font-weight: 600;
+  }
+  button:hover { background: #e44; }
+  button:disabled { background: #555; cursor: wait; }
+  #status { color: #888; font-size: 14px; }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 16px;
+  }
+  .tile {
+    background: #1a1a1a;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: zoom-in;
+  }
+  .tile img {
+    width: 100%; display: block; aspect-ratio: 16/9; object-fit: cover;
+    background: #000;
+  }
+  .tile .meta {
+    padding: 8px 12px;
+    display: flex; justify-content: space-between;
+    font-size: 13px;
+  }
+  .tile .ms { color: #6c6; font-variant-numeric: tabular-nums; }
+  .tile .ms.slow { color: #e94; }
+  .tile .ms.veryslow { color: #f55; }
+  .source-tile { border: 1px solid #444; }
+  .source-tile .name { color: #aaa; font-style: italic; }
+  /* Lightbox */
+  #lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+    display: none; align-items: center; justify-content: center;
+    cursor: zoom-out; z-index: 100;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img { max-width: 95vw; max-height: 95vh; }
+</style>
+</head>
+<body>
+<header>
+  <button id="capture">CAPTURE</button>
+  <h1>Imperfecta — effects preview</h1>
+  <span id="status">idle</span>
+</header>
+<div id="grid"></div>
+<div id="lightbox"><img id="lightbox-img"></div>
+
+<script>
+const btn = document.getElementById('capture');
+const status = document.getElementById('status');
+const grid = document.getElementById('grid');
+const lb = document.getElementById('lightbox');
+const lbImg = document.getElementById('lightbox-img');
+
+lb.addEventListener('click', () => lb.classList.remove('open'));
+
+async function capture() {
+  btn.disabled = true;
+  status.textContent = 'capturing…';
+  const t0 = performance.now();
+  try {
+    const res = await fetch('/capture', { method: 'POST' });
+    const data = await res.json();
+    const totalMs = (performance.now() - t0).toFixed(0);
+    status.textContent = `session ${data.session} · ${data.n_frames} frames · capture ${data.capture_ms.toFixed(0)}ms · total ${totalMs}ms`;
+    render(data);
+  } catch (e) {
+    status.textContent = 'error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function render(data) {
+  grid.innerHTML = '';
+  // Source frame first
+  grid.appendChild(makeTile({
+    name: 'Source (middle frame)',
+    url: data.source_url,
+    ms: null,
+  }, true));
+  for (const r of data.results) {
+    grid.appendChild(makeTile(r, false));
+  }
+}
+
+function makeTile(r, isSource) {
+  const tile = document.createElement('div');
+  tile.className = 'tile' + (isSource ? ' source-tile' : '');
+  const img = document.createElement('img');
+  img.src = r.url;
+  img.loading = 'lazy';
+  img.addEventListener('click', () => {
+    lbImg.src = r.url;
+    lb.classList.add('open');
+  });
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = r.name;
+  meta.appendChild(name);
+  if (r.ms != null) {
+    const ms = document.createElement('span');
+    ms.className = 'ms' + (r.ms > 1500 ? ' veryslow' : r.ms > 800 ? ' slow' : '');
+    ms.textContent = r.ms.toFixed(0) + ' ms';
+    meta.appendChild(ms);
+  }
+  tile.appendChild(img);
+  tile.appendChild(meta);
+  return tile;
+}
+
+btn.addEventListener('click', capture);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !btn.disabled) capture();
+  if (e.key === 'Escape') lb.classList.remove('open');
+});
+</script>
+</body>
+</html>
+"""
+
+
+if __name__ == "__main__":
+    init_camera()
+    url = f"http://localhost:{PORT}"
+    print(f"Preview rig running at {url}")
+    print("Press CAPTURE in the browser (or hit Enter while focused there).")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)

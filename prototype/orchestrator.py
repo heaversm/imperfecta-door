@@ -28,6 +28,8 @@ import time
 import threading
 import json
 
+import os
+
 import requests
 
 try:
@@ -38,14 +40,11 @@ except ImportError:
     print("WARNING: gpiod not available — running in dev mode (no GPIO)")
 
 # ── Config ──────────────────────────────────────────────────────────
-# === LOCATION CONFIG: comment one block, uncomment the other when swapping ===
-# --- HOME ---
-# MAIXCAM_IP = "10.0.0.14"
-# WLED_IP    = "10.0.0.220"
-# --- GALLERY ---
-MAIXCAM_IP = "10.1.10.14"
-WLED_IP    = "10.1.10.221"
-# === /LOCATION CONFIG ===
+# Devices are reached by mDNS hostname so we don't have to update IPs per venue.
+# Override with env vars (e.g. MAIXCAM_HOST=10.0.0.14) if mDNS fails on a network.
+# Requires nss-mdns / avahi-daemon on the Pi for *.local resolution to work.
+MAIXCAM_IP = os.environ.get("MAIXCAM_HOST", "maixcam-288c.local")
+WLED_IP    = os.environ.get("WLED_HOST",    "wled-dig-quad-v3.local")
 
 MAIXCAM_PORT = 8080
 
@@ -180,34 +179,35 @@ def send_to_bg_removal(jpeg_bytes: bytes):
 
 
 def handle_button_press():
-    """Main handler: check for faces, capture full frame, remove bg, trigger LEDs."""
+    """Main handler: kick WLED + fire the effects pipeline.
+
+    The effects server pulls the burst from MaixCam, picks an effect at random,
+    renders it, and pushes the result to the viewer via SSE — all in one POST.
+    """
     print(f"\n[{time.strftime('%H:%M:%S')}] Button pressed!")
 
-    # Fire WLED trigger in parallel with capture
+    # Fire WLED in parallel with effect generation
     wled_thread = threading.Thread(target=trigger_wled_ring, daemon=True)
     wled_thread.start()
 
-    # Check if any faces are visible
-    face_count = check_faces()
-    if face_count == 0:
-        print("  No faces detected — skipping capture")
-        wled_thread.join(timeout=5.0)
-        return
+    # Kick the local effects server
+    try:
+        resp = requests.post(
+            f"http://{BG_SERVER_IP}:{BG_SERVER_PORT}/trigger",
+            timeout=15.0,
+        )
+        if resp.ok:
+            data = resp.json()
+            print(f"  effects: {data.get('effect')} "
+                  f"({data.get('effect_ms', 0):.0f}ms render, "
+                  f"{data.get('total_ms', 0):.0f}ms total)")
+        else:
+            print(f"  effects HTTP {resp.status_code}: {resp.text[:200]}")
+    except requests.RequestException as exc:
+        print(f"  effects trigger failed: {exc}")
 
-    # Grab the full frame (group photo)
-    frame = capture_full_frame()
-    if frame is None:
-        print("  Failed to capture frame")
-        wled_thread.join(timeout=5.0)
-        return
-
-    # Send full frame to bg removal → gallery
-    send_to_bg_removal(frame)
-
-    # Wait for WLED trigger to complete
-    wled_thread.join(timeout=5.0)
-
-    print(f"  Done — group photo with {face_count} face(s)")
+    wled_thread.join(timeout=10.0)
+    print("  Done")
 
 
 def setup_gpio():

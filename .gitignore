@@ -2,3 +2,14 @@ highlights.json
 *.bkp
 *.dtmp
 .DS_Store
+
+# Python virtualenvs / caches (never commit — 200MB of platform binaries)
+.venv/
+__pycache__/
+*.pyc
+
+# Test-render outputs from the effects preview rig
+prototype/effects/output/
+
+# Local Claude session / tool config
+.colorantrc

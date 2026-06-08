@@ -89,3 +89,38 @@ Three layers: NetworkManager infinite retries (`autoconnect-retries 0`), wifi_wa
 ## 8. Display monitor for gallery
 
 Find a monitor to display the photo gallery in the narrow window at the side of the entryway. Considerations: physical dimensions (must fit the narrow window), orientation (likely portrait), input (HDMI from Pi or a dedicated cheap device running the browser), and how to hide cables/power.
+
+## 9. Venue-switch friction reduction (post-2026-05-01 gallery trip)
+
+The first gallery install required ~3 hours of troubleshooting that should have been near-zero. Capturing the remaining work to make "show up and switch" the actual reality.
+
+### 9a. Verify mDNS resolution from the Pi (device-dependent)
+
+`orchestrator.py` now uses mDNS hostnames (`maixcam-288c.local`, `wled-dig-quad-v3.local`) by default. Verify these resolve from the Pi:
+
+```bash
+ssh imperfecta-pi-gallery "getent hosts maixcam-288c.local; getent hosts wled-dig-quad-v3.local"
+```
+
+If they don't resolve, the Pi needs `nss-mdns` (Debian: `sudo apt install libnss-mdns`) and avahi-daemon running. If installing isn't an option, override at startup with `MAIXCAM_HOST=<ip> WLED_HOST=<ip>` env vars on the orchestrator service unit.
+
+### 9b. Set WLED's backup network (device-dependent)
+
+WLED's web UI has two Wi-Fi slots — primary and backup. Today only the primary (`imperfecta 5/2.4`) is set. Browse to `http://wled-dig-quad-v3.local/settings/wifi` and fill in the backup as `VIRUSDETECTED` / `ifyaknowyakn0w!`. Then WLED auto-rejoins at home without the AP-mode dance.
+
+### 9c. Strip hardcoded Wi-Fi from MaixCam `face_capture_server/main.py` (device-dependent)
+
+`/maixapp/apps/face_capture_server/main.py` on the MaixCam has `WIFI_SSID = "VIRUSDETECTED"` / `WIFI_PASSWORD = ...` hardcoded. Wi-Fi is now handled at the system level via `/boot/wpa_supplicant.conf`, so the in-app `connect_wifi()` should be removed (or short-circuit when an IP already exists, which it already does — but the hardcoded creds are stale and misleading).
+
+### 9d. Update home IP for the Pi (device-dependent, do once back home)
+
+The Pi at home was `10.0.0.206`. Confirm next time you're home and the Pi auto-rejoins `VIRUSDETECTED`. Update `~/.ssh/config` `imperfecta-pi` HostName if DHCP gives it a different address.
+
+### 9e. Pre-flight protocol (process)
+
+Before each venue trip:
+1. Pre-program any new venue's Wi-Fi creds on all 3 devices (drop into `/boot/wpa_supplicant.conf` on Pi + MaixCam, set as backup network on WLED).
+2. At the venue, power on all 3 devices, wait 60s.
+3. Run `prototype/smoke_test.sh` from the Mac. PASS = ready. FAIL = drill into whatever it flagged.
+
+This replaces the multi-page runbook for the 80% case.

@@ -9,16 +9,22 @@ Endpoints:
                       return JSON array of base64-encoded face JPEGs
   GET /capture      — backward compat: returns largest face JPEG only
   GET /photo        — full camera frame as JPEG
+  GET /burst?count=N — last N frames from a continuously-filled ring buffer,
+                       returned as a ZIP of frame_000.jpg … frame_NNN.jpg
 
 Requires MaixPy environment (maix.camera, maix.nn, maix.image).
 """
 
 from maix import camera, nn, image, display, network, err
-import json
 import base64
-import time
+import collections
+import io
+import json
 import threading
+import time
+import zipfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 # ── Config ──────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
@@ -26,6 +32,18 @@ PORT = 8080
 CONFIDENCE_THRESHOLD = 0.5
 FACE_PADDING = 60          # px padding around detected face box
 CAPTURE_COOLDOWN = 1.0     # seconds between captures to avoid duplicates
+BURST_BUFFER_SIZE = 60     # max frames retained for /burst (FPS × ~2s typical)
+
+# Capture resolution — DECOUPLED from the YOLO detector input. Previously the
+# camera was sized to the model input (~320px), so every /burst frame the gallery
+# pipeline uses was tiny and mushy. The effects pipeline pulls RAW frames (no
+# detection), so it just needs detail. Detection for the legacy /capture-all
+# endpoint now runs on a downscaled copy (see detect_faces).
+# Sized just above the effects work-res (512px longest side) so /burst frames are
+# sharp but small to ship — capturing at 1280×720 only to downscale to 512 on the
+# Pi wasted ~4× the transfer+decode time and blew the 4s budget (measured 7.2s).
+CAPTURE_WIDTH = 640
+CAPTURE_HEIGHT = 360
 
 WIFI_SSID = "VIRUSDETECTED"
 WIFI_PASSWORD = "ifyaknowyakn0w!"
@@ -38,6 +56,12 @@ detector = None
 disp = None
 latest_frame = None
 frame_lock = threading.Lock()
+# Continuously filled ring of JPEG-encoded frames for instant burst delivery.
+# The doorbell trigger gives zero advance warning, so capturing N frames *after*
+# the trigger would cost ~N × frame_interval — fatal for the 4-second budget.
+# Filling continuously means /burst returns immediately.
+frame_buffer = collections.deque(maxlen=BURST_BUFFER_SIZE)
+buffer_lock = threading.Lock()
 
 
 def connect_wifi():
@@ -60,28 +84,40 @@ def init_hardware():
     global cam, detector, disp
     wifi_ip = connect_wifi()
     detector = nn.YOLOv8(model="/root/models/yolov8n_face.mud", dual_buff=True)
-    cam = camera.Camera(detector.input_width(), detector.input_height(),
-                        detector.input_format())
+    # Full-resolution capture (NOT the detector's tiny input size). The gallery
+    # effects pipeline pulls raw /burst frames and needs the detail.
+    cam = camera.Camera(CAPTURE_WIDTH, CAPTURE_HEIGHT)
     disp = display.Display()
     print(f"Camera and face detector initialized")
     print(f"Reachable at http://{wifi_ip}:{PORT}")
 
 
 def camera_loop():
-    """Continuously read camera, detect faces, show preview with boxes."""
+    """Continuously read camera, detect faces, show preview with boxes.
+
+    Also fills the burst ring buffer: every frame is JPEG-encoded once and
+    appended, so /burst can return the last N frames with no latency.
+    """
     global latest_frame
     while True:
         img = cam.read()
         with frame_lock:
             latest_frame = img.copy()
-        # Draw detection boxes on preview (not on the saved frame)
-        objs = detector.detect(img, conf_th=CONFIDENCE_THRESHOLD, iou_th=0.45)
-        for obj in objs:
-            img.draw_rect(obj.x, obj.y, obj.w, obj.h,
-                         color=image.COLOR_GREEN, thickness=2)
-        if objs:
-            img.draw_string(10, 10, f"Faces: {len(objs)}",
-                           color=image.COLOR_GREEN, scale=1.5)
+        # Append a JPEG copy to the burst buffer. Use a separate tmp path so
+        # this doesn't race with /capture-all's own JPEG encoding.
+        try:
+            tmp_path = "/tmp/_burst_tmp.jpg"
+            img.save(tmp_path)
+            with open(tmp_path, "rb") as f:
+                jpeg = f.read()
+            with buffer_lock:
+                frame_buffer.append(jpeg)
+        except Exception as e:
+            print(f"[burst] frame encode failed: {e}")
+        # Show the live frame on the MaixCam's own screen. We no longer run YOLO
+        # per frame: the gallery uses raw /burst frames, and detecting at full
+        # capture res would mismatch the model input. /capture-all still detects
+        # on demand (downscaled copy). Dropping it also speeds up burst fill.
         disp.show(img)
 
 
@@ -98,14 +134,20 @@ def detect_faces(frame):
 
     Each entry: {"x": int, "y": int, "w": int, "h": int, "confidence": float}
     """
-    objects = detector.detect(frame, conf_th=CONFIDENCE_THRESHOLD, iou_th=0.45)
+    # Capture res is now larger than the model input, so detect on a downscaled
+    # copy and scale boxes back to full-res coords (crop_face then yields hi-res crops).
+    det_w, det_h = detector.input_width(), detector.input_height()
+    small = frame.resize(det_w, det_h)
+    sx = frame.width() / det_w
+    sy = frame.height() / det_h
+    objects = detector.detect(small, conf_th=CONFIDENCE_THRESHOLD, iou_th=0.45)
     faces = []
     for obj in objects:
         faces.append({
-            "x": obj.x,
-            "y": obj.y,
-            "w": obj.w,
-            "h": obj.h,
+            "x": int(obj.x * sx),
+            "y": int(obj.y * sy),
+            "w": int(obj.w * sx),
+            "h": int(obj.h * sy),
             "confidence": obj.score,
         })
     # Sort largest first
@@ -177,15 +219,59 @@ class CaptureHandler(BaseHTTPRequestHandler):
         last_capture_time = now
         return True
 
+    def _send_zip(self, zip_bytes, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(zip_bytes)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(zip_bytes)
+
     def do_GET(self):
-        if self.path == "/capture-all":
+        parsed = urlparse(self.path)
+        route = parsed.path
+        if route == "/capture-all":
             self._handle_capture_all()
-        elif self.path == "/capture":
+        elif route == "/capture":
             self._handle_capture_single()
-        elif self.path == "/photo":
+        elif route == "/photo":
             self._handle_photo()
+        elif route == "/burst":
+            self._handle_burst(parsed.query)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    def _handle_burst(self, query_str):
+        """Return the last N frames from the ring buffer as a ZIP of JPEGs."""
+        qs = parse_qs(query_str)
+        try:
+            count = int(qs.get("count", ["30"])[0])
+        except (ValueError, TypeError):
+            count = 30
+        count = max(1, min(count, BURST_BUFFER_SIZE))
+
+        with buffer_lock:
+            frames = list(frame_buffer)[-count:]
+
+        if not frames:
+            self._send_json({"error": "burst buffer empty"}, 503)
+            return
+
+        buf = io.BytesIO()
+        # ZIP_STORED: no compression — JPEG data is already compressed, and
+        # storage-only is much faster on a constrained device. Explicit
+        # date_time avoids "ZIP does not support timestamps before 1980" if
+        # the MaixCam boots before NTP syncs the clock.
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+            for i, jpeg in enumerate(frames):
+                info = zipfile.ZipInfo(
+                    filename=f"frame_{i:03d}.jpg",
+                    date_time=(2026, 1, 1, 0, 0, 0),
+                )
+                zf.writestr(info, jpeg)
+        body = buf.getvalue()
+        print(f"Burst served: {len(frames)} frames, {len(body)} bytes")
+        self._send_zip(body)
 
     def _handle_capture_all(self):
         """Detect ALL faces, return JSON array of base64 JPEGs."""
@@ -253,9 +339,10 @@ def main():
     cam_thread.start()
     server = HTTPServer((HOST, PORT), CaptureHandler)
     print(f"Face capture server listening on {HOST}:{PORT}")
-    print(f"  GET /capture-all  — all faces (JSON + base64)")
-    print(f"  GET /capture      — largest face (JPEG)")
-    print(f"  GET /photo        — full frame (JPEG)")
+    print(f"  GET /capture-all   — all faces (JSON + base64)")
+    print(f"  GET /capture       — largest face (JPEG)")
+    print(f"  GET /photo         — full frame (JPEG)")
+    print(f"  GET /burst?count=N — last N buffered frames (ZIP of JPEGs)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

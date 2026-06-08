@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imperfecta</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    overflow: hidden;
+    cursor: none;
+    font-family: sans-serif;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Two layered images so we can crossfade between them. */
+  #stage img {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    opacity: 0;
+    transition: opacity 600ms ease-in-out;
+  }
+  #stage img.visible { opacity: 1; }
+  /* Optional status dot for debugging — hidden by default. */
+  #status {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #333;
+    transition: background 200ms;
+    opacity: 0.5;
+  }
+  #status.live { background: #2a2; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <img id="a" alt="">
+  <img id="b" alt="">
+</div>
+<div id="status"></div>
+
+<script>
+const a = document.getElementById('a');
+const b = document.getElementById('b');
+const status = document.getElementById('status');
+let front = a;
+let back = b;
+
+// On load, show whatever's currently in /latest.jpg if it exists.
+front.onload = () => front.classList.add('visible');
+front.onerror = () => { /* no image yet — fine */ };
+front.src = '/latest.jpg?t=' + Date.now();
+
+function swap(url) {
+  // Preload into the back layer, then crossfade.
+  back.onload = () => {
+    back.classList.add('visible');
+    front.classList.remove('visible');
+    // Swap roles so the next update fades the other way.
+    [front, back] = [back, front];
+  };
+  back.onerror = () => { console.warn('image load failed:', url); };
+  back.src = url;
+}
+
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => status.classList.add('live');
+  es.onerror = () => {
+    status.classList.remove('live');
+    // EventSource auto-reconnects; nothing to do.
+  };
+  es.addEventListener('replace', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      swap(data.url);
+    } catch (err) {
+      console.warn('bad replace event:', e.data);
+    }
+  });
+}
+
+connect();
+</script>
+</body>
+</html>
