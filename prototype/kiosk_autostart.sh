@@ -2,22 +2,17 @@
 # Imperfecta gallery kiosk launcher.
 # Deployed to ~/.config/labwc/autostart on the Pi — labwc runs this on login.
 # The Pi auto-logs into the labwc (Wayland) session, so this fires on every boot.
-
-# Wait for the effects server (systemd: bg_removal.service) to be serving
-# before opening the browser, so we never land on a connection-refused page.
-i=0
-while [ $i -lt 30 ]; do
-  if curl -sf -o /dev/null http://localhost:5050/; then
-    break
-  fi
-  i=$((i + 1))
-  sleep 1
-done
-
-# Launch Chromium fullscreen at the gallery.
-#   --password-store=basic  → never prompt for the GNOME keyring
-#   --kiosk                 → fullscreen, no chrome
-#   --incognito             → no profile cruft / "restore pages" bubble
+#
+# Launches Chromium IMMEDIATELY at a local black loading page (file://) so the Pi
+# desktop is never visible during boot. That page polls the effects server and
+# navigates to the live viewer the instant it's ready — so there's no fixed wait
+# and no connection-refused race (the old "wait 30s then launch and hope" left
+# Chromium stuck on a dead page if the Pi 3B+ booted slowly).
+#
+#   --password-store=basic         → never prompt for the GNOME keyring
+#   --kiosk                        → fullscreen, no chrome
+#   --incognito                    → no profile cruft / "restore pages" bubble
+#   --allow-file-access-from-files → let the local loading page reach the server
 #   --check-for-update-interval huge → no update nags during an exhibit
 chromium \
   --kiosk \
@@ -27,4 +22,5 @@ chromium \
   --disable-session-crashed-bubble \
   --check-for-update-interval=31536000 \
   --incognito \
-  "http://localhost:5050/" &
+  --allow-file-access-from-files \
+  "file:///home/imperfecta/kiosk_loading.html" &

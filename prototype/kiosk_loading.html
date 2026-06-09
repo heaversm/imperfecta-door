@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Imperfecta — starting…</title>
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; cursor: none; }
+</style>
+</head>
+<body>
+<script>
+// Local black page Chromium opens the instant the kiosk launches — so the Pi
+// desktop is never visible on boot. It polls the effects server and navigates to
+// the live viewer the moment the server responds, eliminating the cold-boot race
+// (no fixed wait, no connection-refused page). no-cors fetch resolves when the
+// server is listening and rejects (retry) while it's still coming up.
+const TARGET = 'http://localhost:5050/';
+function check() {
+  fetch('http://localhost:5050/health', { mode: 'no-cors', cache: 'no-store' })
+    .then(() => { window.location.replace(TARGET); })
+    .catch(() => { setTimeout(check, 1000); });
+}
+check();
+</script>
+</body>
+</html>

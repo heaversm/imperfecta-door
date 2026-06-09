@@ -77,12 +77,18 @@ function swap(url) {
   back.src = url;
 }
 
+let everConnected = false;
+
 function connect() {
   const es = new EventSource('/events');
-  es.onopen = () => status.classList.add('live');
+  es.onopen = () => { everConnected = true; status.classList.add('live'); };
   es.onerror = () => {
     status.classList.remove('live');
-    // EventSource auto-reconnects; nothing to do.
+    // CONNECTING (0): EventSource is auto-reconnecting, leave it. CLOSED (2): it
+    // gave up — reload the whole page to recover rather than sit stuck.
+    if (es.readyState === EventSource.CLOSED) {
+      setTimeout(() => location.reload(), 3000);
+    }
   };
   es.addEventListener('replace', (e) => {
     try {
@@ -95,6 +101,11 @@ function connect() {
 }
 
 connect();
+
+// Self-heal watchdog: if we never establish the live connection within 20s, the
+// page loaded in a bad state (e.g. server not ready when it loaded) — reload to
+// recover. Prevents the "stuck on a blank screen forever" cold-boot failure.
+setTimeout(() => { if (!everConnected) location.reload(); }, 20000);
 </script>
 </body>
 </html>
