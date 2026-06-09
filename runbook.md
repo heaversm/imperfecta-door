@@ -36,9 +36,20 @@ ssh imperfecta-pi 'sudo journalctl -u orchestrator -f'      # watch doorbell tri
 ```
 MaixCam access (through the Pi): `ssh -J imperfecta-pi -i ~/.ssh/id_imperfecta root@<maixcam-ip>`.
 
-**Shutting down:** always use `~/shutdown` (or `sudo poweroff`) and wait for the green LED
-to go dark before pulling power. Yanking power while running can corrupt the SD card —
-that's what killed the first card. (Until the read-only filesystem is enabled — see Go-live.)
+**Shutting down:** always power down cleanly and wait for the green LED to go dark before
+pulling power. Yanking power while running can corrupt the SD card — that's what killed the
+first card. (Until the read-only filesystem is enabled — see Go-live.) Three ways:
+- **Mac alias (easiest):** `imperfecta-off`
+- **Mac, full command:** `ssh imperfecta-pi /home/imperfecta/shutdown`
+- **On the Pi directly:** `~/shutdown` or `sudo poweroff`
+
+The `imperfecta-off` alias lives in the Mac's `~/.zshrc` (not in this repo). To recreate it
+on a fresh Mac:
+```bash
+echo "alias imperfecta-off='ssh imperfecta-pi /home/imperfecta/shutdown'" >> ~/.zshrc && source ~/.zshrc
+```
+Passwordless power-off is enabled on the Pi via `/etc/sudoers.d/010-poweroff`; the `~/shutdown`
+script is also in the repo at `prototype/shutdown.sh` (redeploy after a reflash).
 
 ---
 
