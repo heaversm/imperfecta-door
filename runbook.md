@@ -28,12 +28,35 @@ cd ~/Desktop/imperfecta/_project/prototype && ./smoke_test.sh
 
 **Daily ops:**
 ```bash
+ssh imperfecta-pi '~/shutdown'                              # safe power-off (no password prompt)
 ssh imperfecta-pi '~/kiosk'                                  # relaunch fullscreen display
 ssh imperfecta-pi '~/kiosk stop'                             # close it
 ssh imperfecta-pi 'curl -s -X POST http://localhost:5050/trigger'   # fire a capture manually
 ssh imperfecta-pi 'sudo journalctl -u orchestrator -f'      # watch doorbell triggers live
 ```
 MaixCam access (through the Pi): `ssh -J imperfecta-pi -i ~/.ssh/id_imperfecta root@<maixcam-ip>`.
+
+**Shutting down:** always use `~/shutdown` (or `sudo poweroff`) and wait for the green LED
+to go dark before pulling power. Yanking power while running can corrupt the SD card —
+that's what killed the first card. (Until the read-only filesystem is enabled — see Go-live.)
+
+---
+
+## 🚀 Go-live hardening (do these LAST, before the unattended gallery run)
+
+Skip these while actively developing — they make code deploys a two-reboot chore.
+Enable them only once the code is stable and the Pi will sit power-cycled by a wall switch.
+
+- [ ] **Read-only filesystem** so pulling the plug can't corrupt the card:
+      `sudo raspi-config` → **Performance Options → Overlay File System → enable** → reboot.
+      - With it ON, the SD is read-only; `latest.jpg`/logs live in RAM (fine — ephemeral).
+      - **To deploy code afterward:** raspi-config → disable overlay → reboot → `deploy.sh` →
+        re-enable overlay → reboot. (That's why it's a go-live-only step.)
+      - Saved WiFi/presets/config persist (baked into the image); you just can't *add* new
+        ones without toggling overlay off.
+- [ ] Confirm cold-boot comes straight up into the experience (black → grid), no desktop.
+- [ ] Confirm WLED is pointed at the gallery network (`~/wled_switch.sh gallery`).
+- [ ] `./smoke_test.sh` all green.
 
 ---
 
