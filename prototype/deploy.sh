@@ -5,7 +5,7 @@ set -e
 PI_HOST="${PI_HOST:-imperfecta-pi}"
 SRC=/Users/mheavers/Desktop/imperfecta/_project/prototype
 
-scp "$SRC/orchestrator.py" "$SRC/effects_server.py" "$SRC/effects/effects.py" "$PI_HOST":~/
+scp "$SRC/orchestrator.py" "$SRC/effects_server.py" "$SRC/palette.py" "$SRC/effects/effects.py" "$PI_HOST":~/
 ssh "$PI_HOST" "mkdir -p ~/static"
 scp "$SRC/static/viewer.html" "$PI_HOST":~/static/
 # Restart both services. bg_removal.service still has the old unit name; if

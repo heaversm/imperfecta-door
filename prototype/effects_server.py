@@ -50,43 +50,8 @@ FRAMES_DIR = os.path.join(RENDER_DIR, "frames")
 os.makedirs(FRAMES_DIR, exist_ok=True)
 # ────────────────────────────────────────────────────────────────────
 
-# Effect palette for the slideshow loop. Each entry is (display_name, callable);
-# the callable takes the burst (list of PIL Images) and returns one PIL Image.
-# The B&W distortion family shares _bw_treatment; warhol/lichtenstein/mondrian stay color.
-_bw = effects._bw_treatment
-
-def _slit_h(frames): return _bw(effects.slitscan_horizontal(frames)[0])
-def _liq(frames):    return _bw(effects.liquify(frames[len(frames) // 2], wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45)[0])
-def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10, pad_frac=0.04, bleed_frac=0.38)[0])
-def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
-def _warhol(frames): return effects.warhol(frames)[0]                  # color
-def _slice(frames):  return effects.slice_displacement(frames)[0]      # still (random bands per render)
-
-# Two kinds of loop item:
-#  - STILL_PALETTE: one rendered image per ring (rendered first → fast first image;
-#    hockney is the ~3s outlier, so it renders LAST).
-#  - ANIM_PALETTE: cheap single-frame effects rendered across several burst frames so
-#    the subject MOVES ("living" effects). Each callable takes ([single_frame], seed);
-#    a stable per-clip seed keeps random structure fixed while only the subject moves.
-STILL_PALETTE = [
-    ("warhol",              _warhol),   # cheap → first image fast
-    ("slice displacement",  _slice),
-    ("water refraction",    _water),
-    ("slitscan horizontal", _slit_h),
-    ("liquify",             _liq),
-    ("hockney",             _hock),      # ~3s outlier → rendered LAST
-]
-
-ANIM_FRAMES = 6   # frames per living-effect clip
-
-def _a_dither(fr, seed): return effects.dither(fr)[0]
-def _a_mond(fr, seed):   return effects.mondrian(fr, seed=seed)[0]
-
-ANIM_PALETTE = [
-    ("dither (live)",   _a_dither),
-    ("mondrian (live)", _a_mond),
-]
-FLIPBOOK_KIND = "flipbook"   # raw burst clip, inserted at the front of the playlist
+# The effect roster lives in palette.py (shared with the preview rig — tie in once there).
+from palette import STILL_PALETTE, ANIM_PALETTE, ANIM_FRAMES, FLIPBOOK_KIND
 
 # ── Flask app ───────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=STATIC_DIR)
