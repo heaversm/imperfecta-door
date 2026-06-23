@@ -17,11 +17,17 @@ import time
 import webbrowser
 from pathlib import Path
 
+import os
+import sys
+
 import cv2
 from flask import Flask, jsonify, render_template_string, send_from_directory
 from PIL import Image
 
-import effects
+# palette.py lives in prototype/ (the parent of this effects/ dir).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import effects   # noqa: E402  (path set above)
+import palette    # noqa: E402  (the shared roster — same effects the gallery loop uses)
 
 # ─── Config ────────────────────────────────────────────────────────────────
 BURST_FRAMES = 30        # how many frames per capture
@@ -80,33 +86,20 @@ def capture_burst(n: int = BURST_FRAMES) -> list[Image.Image]:
 
 
 def run_all_effects(frames: list[Image.Image]) -> list[dict]:
-    """Run every effect (with param sweeps) and return metadata."""
+    """Render the shared roster (palette.py) so preview matches the gallery exactly.
+    Stills render from the whole burst; living effects are previewed as a single still."""
     results = []
-    middle_frame = frames[len(frames) // 2]
+    middle = [frames[len(frames) // 2]]
 
-    def record(name: str, image_and_ms):
-        img, ms = image_and_ms
-        results.append({"name": name, "image": img, "ms": ms})
+    def timed(label, fn, *args):
+        t0 = time.perf_counter()
+        img = fn(*args)
+        results.append({"name": label, "image": img, "ms": (time.perf_counter() - t0) * 1000})
 
-    # v1 palette — the effects that will ship to the Pi.
-    record("Slitscan vertical", effects.slitscan_vertical(frames))
-    record("Slitscan horizontal", effects.slitscan_horizontal(frames))
-    record("Echo max blend", effects.echo_max(frames))
-    record("Time grid 8x6", effects.time_grid(frames, rows=8, cols=6))
-    record(
-        "Hockney 3x3 chunky",
-        effects.hockney_joiner(
-            frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10
-        ),
-    )
-    record(
-        "Liquify extreme",
-        effects.liquify(middle_frame, wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45),
-    )
-    record("Warhol pop", effects.warhol(frames))
-    record("Lichtenstein", effects.lichtenstein(frames))
-    record("Mondrian", effects.mondrian(frames))
-
+    for name, fn in palette.STILL_PALETTE:
+        timed(name, fn, frames)
+    for name, fn in palette.ANIM_PALETTE:
+        timed(name, fn, middle, 0)   # living effects: preview the middle frame as a still
     return results
 
 
