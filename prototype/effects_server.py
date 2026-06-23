@@ -55,31 +55,40 @@ os.makedirs(FRAMES_DIR, exist_ok=True)
 # The B&W distortion family shares _bw_treatment; warhol/lichtenstein/mondrian stay color.
 _bw = effects._bw_treatment
 
-def _slit_h(frames):  return _bw(effects.slitscan_horizontal(frames)[0])
-def _dither(frames):  return effects.dither(frames)[0]   # already 1-bit B&W, no _bw wrap
+def _slit_h(frames): return _bw(effects.slitscan_horizontal(frames)[0])
 def _liq(frames):    return _bw(effects.liquify(frames[len(frames) // 2], wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45)[0])
 def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10, pad_frac=0.04, bleed_frac=0.38)[0])
-def _slice(frames):  return effects.slice_displacement(frames)[0]      # B&W internally
 def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
 def _warhol(frames): return effects.warhol(frames)[0]                  # color
-def _point(frames):  return effects.pointillism(frames)[0]   # Seurat dots (replaces lichtenstein/halftone)
-def _mond(frames):   return effects.mondrian(frames)[0]                # color
+def _point(frames):  return effects.pointillism(frames)[0]             # Seurat dots
 
-# Order = render order = loop order. The spike (2026-06-23) showed hockney is a 1.6s
-# outlier at 1024px, so it renders LAST (a cheap effect leads so the first image lands
-# inside the 5s WLED ring). Color/B&W interleaved for variety. flipbook = viewer-rendered.
-EFFECT_PALETTE = [
-    ("warhol",             _warhol),   # ~150ms — cheap, punchy first image
-    ("slice displacement", _slice),
-    ("pointillism",        _point),
-    ("water refraction",   _water),
+# Two kinds of loop item:
+#  - STILL_PALETTE: one rendered image per ring (rendered first → fast first image;
+#    hockney is the ~3s outlier, so it renders LAST).
+#  - ANIM_PALETTE: cheap single-frame effects rendered across several burst frames so
+#    the subject MOVES ("living" effects). Each callable takes ([single_frame], seed);
+#    a stable per-clip seed keeps random structure fixed while only the subject moves.
+STILL_PALETTE = [
+    ("warhol",              _warhol),   # cheap → first image fast
+    ("pointillism",         _point),
+    ("water refraction",    _water),
     ("slitscan horizontal", _slit_h),
-    ("mondrian",           _mond),
-    ("dither",             _dither),
-    ("liquify",            _liq),
-    ("hockney",            _hock),      # ~1.6s — render LAST
+    ("liquify",             _liq),
+    ("hockney",             _hock),      # ~3s outlier → rendered LAST
 ]
-FLIPBOOK_KIND = "flipbook"   # viewer-rendered item, inserted into the playlist
+
+ANIM_FRAMES = 6   # frames per living-effect clip
+
+def _a_dither(fr, seed): return effects.dither(fr)[0]
+def _a_slice(fr, seed):  return effects.slice_displacement(fr, seed=seed)[0]
+def _a_mond(fr, seed):   return effects.mondrian(fr, seed=seed)[0]
+
+ANIM_PALETTE = [
+    ("dither (live)",   _a_dither),
+    ("slice (live)",    _a_slice),
+    ("mondrian (live)", _a_mond),
+]
+FLIPBOOK_KIND = "flipbook"   # raw burst clip, inserted at the front of the playlist
 
 # ── Flask app ───────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=STATIC_DIR)
@@ -126,6 +135,9 @@ def _save_burst_frames(frames: list[Image.Image], stride: int = 2) -> list[str]:
     Returns cache-busted URLs. stride=2 → ~15 frames from 30."""
     import glob
     for old in glob.glob(os.path.join(FRAMES_DIR, "*.jpg")):
+        os.remove(old)
+    # Clear stale stills too (roster size can change between deploys).
+    for old in glob.glob(os.path.join(RENDER_DIR, "latest_*.jpg")):
         os.remove(old)
     urls = []
     token = str(int(time.time() * 1000))
@@ -219,9 +231,9 @@ def trigger():
         flip_urls = _save_burst_frames(frames)
         _push_sse("playlist-start", {"flipbook": flip_urls, "kind": FLIPBOOK_KIND})
 
-        # Stream-render stills one at a time; push each as it completes. A failing
-        # effect is skipped, not fatal.
-        for i, (name, fn) in enumerate(EFFECT_PALETTE):
+        # 1) Stream-render stills one at a time; push each as it completes (a failing
+        #    effect is skipped, not fatal).
+        for i, (name, fn) in enumerate(STILL_PALETTE):
             try:
                 t0 = time.perf_counter()
                 img = fn(frames)
@@ -235,9 +247,30 @@ def trigger():
             except Exception as e:
                 print(f"  effect {name} failed, skipping: {e}")
 
+        # 2) "Living" effects: render each cheap effect across ANIM_FRAMES burst frames
+        #    (stable per-clip seed → structure fixed while the subject moves), push as a clip.
+        stride = max(1, len(frames) // ANIM_FRAMES)
+        window = frames[::stride][:ANIM_FRAMES]
+        for k, (name, fn) in enumerate(ANIM_PALETTE):
+            try:
+                t0 = time.perf_counter()
+                urls = []
+                for j, fr in enumerate(window):
+                    img = fn([fr], 1000 + k)
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    fname = f"clip{k}_{j}.jpg"
+                    img.save(os.path.join(FRAMES_DIR, fname), "JPEG", quality=85)
+                    urls.append(f"/frames/{fname}?t={int(time.time() * 1000)}")
+                _push_sse("append", {"index": 100 + k, "kind": "clip", "frames": urls, "name": name})
+                print(f"  {name} (clip x{len(urls)}): {(time.perf_counter() - t0) * 1000:.0f}ms")
+            except Exception as e:
+                print(f"  living effect {name} failed, skipping: {e}")
+
         total_ms = (time.perf_counter() - overall) * 1000
-        print(f"  done: {len(EFFECT_PALETTE)} stills, total {total_ms:.0f}ms")
-        return jsonify({"ok": True, "stills": len(EFFECT_PALETTE), "total_ms": round(total_ms, 1)})
+        print(f"  done: {len(STILL_PALETTE)} stills + {len(ANIM_PALETTE)} clips, total {total_ms:.0f}ms")
+        return jsonify({"ok": True, "stills": len(STILL_PALETTE), "clips": len(ANIM_PALETTE),
+                        "total_ms": round(total_ms, 1)})
     finally:
         _trigger_lock.release()
 
@@ -250,5 +283,6 @@ def health():
 if __name__ == "__main__":
     print(f"effects_server: listening on {HOST}:{PORT}")
     print(f"  MaixCam burst:   http://{MAIXCAM_HOST}:{MAIXCAM_PORT}/burst")
-    print(f"  Effect palette:  {[n for n, _ in EFFECT_PALETTE]}")
+    print(f"  Stills:  {[n for n, _ in STILL_PALETTE]}")
+    print(f"  Living:  {[n for n, _ in ANIM_PALETTE]}")
     app.run(host=HOST, port=PORT, threaded=True)

@@ -98,7 +98,7 @@ async function step() {
   if (!active.length) { setTimeout(step, 500); return; }   // nothing yet — wait for a ring
   const item = active[idx % active.length];
   idx++;
-  if (item.kind === 'flipbook') {
+  if (item.kind === 'flipbook' || item.kind === 'clip') {
     await playFlipbook(item.frames);
     setTimeout(step, 200);
   } else {
@@ -139,8 +139,13 @@ function connect() {
   es.addEventListener('append', (e) => {
     const d = JSON.parse(e.data);
     if (!building) building = [];
-    preload([d.url]);
-    building.push({ kind: 'still', url: d.url });
+    if (d.kind === 'clip') {
+      preload(d.frames);
+      building.push({ kind: 'clip', frames: d.frames });
+    } else {
+      preload([d.url]);
+      building.push({ kind: 'still', url: d.url });
+    }
     if (building.length >= 2) { active = building; idx = 0; }   // hand over — no black gap
   });
 }
