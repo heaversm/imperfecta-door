@@ -556,14 +556,16 @@ def dither(
     contrast_cutoff: int = 2,
     pixel_size: int = 2,
     invert: bool = False,
+    fg: tuple[int, int, int] = (60, 255, 90),
+    bg: tuple[int, int, int] = (0, 0, 0),
 ) -> Image.Image:
-    """Floyd-Steinberg error-diffusion dither → white stipple on black, dot density
-    tracking brightness. Encodes gradient as dot density, so facial detail reads
-    clearly (unlike hard-threshold effects).
+    """Floyd-Steinberg error-diffusion dither → stipple whose dot density tracks
+    brightness, mapped to a 2-color palette. Defaults to classic phosphor green-on-black.
 
       contrast_cutoff — autocontrast percentile to crush highlights/shadows.
       pixel_size      — >1 coarsens the stipple (downscale → dither → blocky upscale).
-      invert          — flip if the scene reads black-face-on-white instead of white-on-black.
+      invert          — flip polarity (which areas get the lit foreground color).
+      fg/bg           — foreground (lit) and background colors; default green on black.
     """
     g = ImageOps.autocontrast(_middle_frame(frames).convert("L"), cutoff=contrast_cutoff)
     if invert:
@@ -574,7 +576,40 @@ def dither(
         d = small.convert("1").resize((w, h), Image.NEAREST)
     else:
         d = g.convert("1")
-    return d.convert("RGB")
+    lit = np.asarray(d.convert("L")) > 127
+    out = np.empty((*lit.shape, 3), dtype=np.uint8)
+    out[:] = bg
+    out[lit] = fg
+    return Image.fromarray(out)
+
+
+# ─── Pointillism (Seurat) ────────────────────────────────────────────────────
+
+@_timed
+def pointillism(
+    frames: list[Image.Image],
+    dot_spacing: int = 10,
+    dot_radius: int = 7,
+    jitter: float = 0.35,
+    bg: tuple[int, int, int] = (248, 244, 236),
+    seed: int | None = None,
+) -> Image.Image:
+    """Rebuild the image from many small colored dots sampled from the source — color
+    and tone are preserved, so the face reads, with a painterly stipple texture."""
+    rng = random.Random(seed)
+    arr = np.asarray(_middle_frame(frames))
+    h, w = arr.shape[:2]
+    canvas = Image.new("RGB", (w, h), bg)
+    draw = ImageDraw.Draw(canvas)
+    r = dot_radius
+    jit = max(0, int(jitter * dot_spacing))
+    for y in range(0, h, dot_spacing):
+        for x in range(0, w, dot_spacing):
+            sx = min(w - 1, max(0, x + rng.randint(-jit, jit)))
+            sy = min(h - 1, max(0, y + rng.randint(-jit, jit)))
+            color = (int(arr[sy, sx, 0]), int(arr[sy, sx, 1]), int(arr[sy, sx, 2]))
+            draw.ellipse((sx - r, sy - r, sx + r, sy + r), fill=color)
+    return canvas
 
 
 # ─── Halftone (pop / Lichtenstein, rebuilt) ──────────────────────────────────
