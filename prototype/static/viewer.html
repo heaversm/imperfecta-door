@@ -57,54 +57,99 @@
 const a = document.getElementById('a');
 const b = document.getElementById('b');
 const status = document.getElementById('status');
-let front = a;
-let back = b;
+let front = a, back = b;
 
-// On load, show whatever's currently in /latest.jpg if it exists.
-front.onload = () => front.classList.add('visible');
-front.onerror = () => { /* no image yet — fine */ };
-front.src = '/latest.jpg?t=' + Date.now();
+const SLIDE_MS = 4000;     // dwell per still
+const FADE_MS = 600;       // matches the CSS opacity transition
+const FLIP_FPS = 6;        // flipbook playback rate
+const FLIP_LOOPS = 1;      // ping-pong passes before advancing
 
-function swap(url) {
+let active = [];           // playlist currently looping: [{kind:'still',url} | {kind:'flipbook',frames}]
+let building = null;       // playlist being assembled from a new capture
+let idx = 0;
+let everConnected = false;
+
+function preload(urls) { urls.forEach(u => { const im = new Image(); im.src = u; }); }
+
+function showStill(url) {
   // Preload into the back layer, then crossfade.
   back.onload = () => {
     back.classList.add('visible');
     front.classList.remove('visible');
-    // Swap roles so the next update fades the other way.
-    [front, back] = [back, front];
+    [front, back] = [back, front];   // swap roles for the next fade
   };
-  back.onerror = () => { console.warn('image load failed:', url); };
+  back.onerror = () => console.warn('image load failed:', url);
   back.src = url;
 }
 
-let everConnected = false;
+async function playFlipbook(frames) {
+  // Ping-pong through the raw burst frames on the front layer → they watch themselves move.
+  back.classList.remove('visible');
+  const seq = frames.concat(frames.slice(1, -1).reverse());
+  const order = [].concat(...Array(FLIP_LOOPS).fill(seq));
+  for (const url of order) {
+    front.src = url;
+    front.classList.add('visible');
+    await new Promise(r => setTimeout(r, 1000 / FLIP_FPS));
+  }
+}
+
+async function step() {
+  if (!active.length) { setTimeout(step, 500); return; }   // nothing yet — wait for a ring
+  const item = active[idx % active.length];
+  idx++;
+  if (item.kind === 'flipbook') {
+    await playFlipbook(item.frames);
+    setTimeout(step, 200);
+  } else {
+    showStill(item.url);
+    setTimeout(step, SLIDE_MS + FADE_MS);
+  }
+}
+
+async function bootstrap() {
+  // After a reload (self-heal or kiosk relaunch), rebuild the last playlist from the
+  // render outputs still on disk so we don't sit black until the next ring.
+  const items = [];
+  for (let i = 0; i < 32; i++) {
+    const url = `/latest_${i}.jpg?t=${Date.now()}`;
+    const ok = await fetch(url, { method: 'HEAD', cache: 'no-store' }).then(r => r.ok).catch(() => false);
+    if (!ok) break;
+    items.push({ kind: 'still', url });
+  }
+  if (items.length && !active.length) { active = items; idx = 0; }
+}
 
 function connect() {
   const es = new EventSource('/events');
   es.onopen = () => { everConnected = true; status.classList.add('live'); };
   es.onerror = () => {
     status.classList.remove('live');
-    // CONNECTING (0): EventSource is auto-reconnecting, leave it. CLOSED (2): it
-    // gave up — reload the whole page to recover rather than sit stuck.
-    if (es.readyState === EventSource.CLOSED) {
-      setTimeout(() => location.reload(), 3000);
-    }
+    // CONNECTING (0): auto-reconnecting, leave it. CLOSED (2): gave up — reload to recover.
+    if (es.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 3000);
   };
-  es.addEventListener('replace', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      swap(data.url);
-    } catch (err) {
-      console.warn('bad replace event:', e.data);
+  es.addEventListener('playlist-start', (e) => {
+    const d = JSON.parse(e.data);
+    building = [];   // start assembling a new playlist; keep looping the current one
+    if (d.flipbook && d.flipbook.length) {
+      preload(d.flipbook);
+      building.push({ kind: 'flipbook', frames: d.flipbook });
     }
+  });
+  es.addEventListener('append', (e) => {
+    const d = JSON.parse(e.data);
+    if (!building) building = [];
+    preload([d.url]);
+    building.push({ kind: 'still', url: d.url });
+    if (building.length >= 2) { active = building; idx = 0; }   // hand over — no black gap
   });
 }
 
 connect();
+bootstrap().then(step);
 
-// Self-heal watchdog: if we never establish the live connection within 20s, the
-// page loaded in a bad state (e.g. server not ready when it loaded) — reload to
-// recover. Prevents the "stuck on a blank screen forever" cold-boot failure.
+// Self-heal watchdog: if the live connection never establishes within 20s, the page
+// loaded in a bad state — reload to recover (cold-boot race protection).
 setTimeout(() => { if (!everConnected) location.reload(); }, 20000);
 </script>
 </body>
