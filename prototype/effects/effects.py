@@ -543,3 +543,32 @@ def water_refraction(
     return Image.fromarray(_numpy_remap(arr, src_x, src_y))
 
 
+# ─── Dither (1-bit stipple) ──────────────────────────────────────────────────
+
+@_timed
+def dither(
+    frames: list[Image.Image],
+    contrast_cutoff: int = 2,
+    pixel_size: int = 2,
+    invert: bool = False,
+) -> Image.Image:
+    """Floyd-Steinberg error-diffusion dither → white stipple on black, dot density
+    tracking brightness. Encodes gradient as dot density, so facial detail reads
+    clearly (unlike hard-threshold effects).
+
+      contrast_cutoff — autocontrast percentile to crush highlights/shadows.
+      pixel_size      — >1 coarsens the stipple (downscale → dither → blocky upscale).
+      invert          — flip if the scene reads black-face-on-white instead of white-on-black.
+    """
+    g = ImageOps.autocontrast(_middle_frame(frames).convert("L"), cutoff=contrast_cutoff)
+    if invert:
+        g = ImageOps.invert(g)
+    w, h = g.size
+    if pixel_size > 1:
+        small = g.resize((max(1, w // pixel_size), max(1, h // pixel_size)), Image.BILINEAR)
+        d = small.convert("1").resize((w, h), Image.NEAREST)
+    else:
+        d = g.convert("1")
+    return d.convert("RGB")
+
+

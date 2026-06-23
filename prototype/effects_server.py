@@ -55,14 +55,14 @@ os.makedirs(FRAMES_DIR, exist_ok=True)
 # The B&W distortion family shares _bw_treatment; warhol/lichtenstein/mondrian stay color.
 _bw = effects._bw_treatment
 
-def _slit_h(frames): return _bw(effects.slitscan_horizontal(frames)[0])
-def _echo(frames):   return _bw(effects.echo_trails(frames)[0])
+def _slit_h(frames):  return _bw(effects.slitscan_horizontal(frames)[0])
+def _dither(frames):  return effects.dither(frames)[0]   # already 1-bit B&W, no _bw wrap
 def _liq(frames):    return _bw(effects.liquify(frames[len(frames) // 2], wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45)[0])
 def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10, pad_frac=0.04, bleed_frac=0.38)[0])
 def _slice(frames):  return effects.slice_displacement(frames)[0]      # B&W internally
 def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
 def _warhol(frames): return effects.warhol(frames)[0]                  # color
-def _licht(frames):  return effects.lichtenstein(frames)[0]            # color
+def _licht(frames):  return effects.lichtenstein(frames, dot_spacing=10, edge_threshold=45)[0]  # color, finer dots + more edges
 def _mond(frames):   return effects.mondrian(frames)[0]                # color
 
 # Order = render order = loop order. The spike (2026-06-23) showed hockney is a 1.6s
@@ -75,7 +75,7 @@ EFFECT_PALETTE = [
     ("water refraction",   _water),
     ("slitscan horizontal", _slit_h),
     ("mondrian",           _mond),
-    ("echo",               _echo),
+    ("dither",             _dither),
     ("liquify",            _liq),
     ("hockney",            _hock),      # ~1.6s — render LAST
 ]
