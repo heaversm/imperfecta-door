@@ -44,46 +44,36 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 LATEST_PATH = os.path.join(STATIC_DIR, "latest.jpg")
 # ────────────────────────────────────────────────────────────────────
 
-# v1 effect palette. Each entry is (display_name, callable).
-# The callable takes a list of PIL Images and returns a PIL Image.
-# Wraps each effect to discard its timing tuple (we measure ours).
-def _effect(fn, *args, **kwargs):
-    def call(frames):
-        result = fn(*args, frames=frames, **kwargs) if "frames" in fn.__code__.co_varnames else fn(frames, *args, **kwargs)
-        # All effects return (image, ms) via @_timed
-        return result[0]
-    return call
+# Effect palette for the slideshow loop. Each entry is (display_name, callable);
+# the callable takes the burst (list of PIL Images) and returns one PIL Image.
+# The B&W distortion family shares _bw_treatment; warhol/lichtenstein/mondrian stay color.
+_bw = effects._bw_treatment
 
+def _slit_v(frames): return _bw(effects.slitscan_vertical(frames)[0])
+def _emax(frames):   return _bw(effects.echo_max(frames)[0])
+def _liq(frames):    return _bw(effects.liquify(frames[len(frames) // 2], wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45)[0])
+def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10)[0])
+def _slice(frames):  return effects.slice_displacement(frames)[0]      # B&W internally
+def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
+def _warhol(frames): return effects.warhol(frames)[0]                  # color
+def _licht(frames):  return effects.lichtenstein(frames)[0]            # color
+def _mond(frames):   return effects.mondrian(frames)[0]                # color
 
-def _slit_v(frames): return effects.slitscan_vertical(frames)[0]
-def _slit_h(frames): return effects.slitscan_horizontal(frames)[0]
-def _emax(frames):   return effects.echo_max(frames)[0]
-def _tgrid(frames):  return effects.time_grid(frames, rows=8, cols=6)[0]
-def _hock(frames):
-    return effects.hockney_joiner(
-        frames, rows=3, cols=3,
-        rotation_max_deg=12, jitter_frac=0.12, border_px=10
-    )[0]
-def _liq(frames):
-    middle = frames[len(frames) // 2]
-    return effects.liquify(
-        middle, wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45
-    )[0]
-def _warhol(frames):    return effects.warhol(frames)[0]
-def _licht(frames):     return effects.lichtenstein(frames)[0]
-def _mond(frames):      return effects.mondrian(frames)[0]
-
+# Order = render order = loop order. The spike (2026-06-23) showed hockney is a 1.6s
+# outlier at 1024px, so it renders LAST (a cheap effect leads so the first image lands
+# inside the 5s WLED ring). Color/B&W interleaved for variety. flipbook = viewer-rendered.
 EFFECT_PALETTE = [
-    ("slitscan vertical",   _slit_v),
-    ("slitscan horizontal", _slit_h),
-    ("echo max",            _emax),
-    ("time grid 8x6",       _tgrid),
-    ("hockney 3x3",         _hock),
-    ("liquify extreme",     _liq),
-    ("warhol",              _warhol),
-    ("lichtenstein",        _licht),
-    ("mondrian",            _mond),
+    ("warhol",             _warhol),   # ~150ms — cheap, punchy first image
+    ("slice displacement", _slice),
+    ("lichtenstein",       _licht),
+    ("water refraction",   _water),
+    ("slitscan vertical",  _slit_v),
+    ("mondrian",           _mond),
+    ("echo",               _emax),
+    ("liquify",            _liq),
+    ("hockney",            _hock),      # ~1.6s — render LAST
 ]
+FLIPBOOK_KIND = "flipbook"   # viewer-rendered item, inserted into the playlist
 
 # Grid layout: render all 9 effects per press, composite into rows × cols.
 # Keeps each tile near its native source resolution (avoiding the 4×
