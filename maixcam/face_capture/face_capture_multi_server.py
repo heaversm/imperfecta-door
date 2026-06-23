@@ -39,11 +39,11 @@ BURST_BUFFER_SIZE = 60     # max frames retained for /burst (FPS × ~2s typical)
 # pipeline uses was tiny and mushy. The effects pipeline pulls RAW frames (no
 # detection), so it just needs detail. Detection for the legacy /capture-all
 # endpoint now runs on a downscaled copy (see detect_faces).
-# Sized just above the effects work-res (512px longest side) so /burst frames are
-# sharp but small to ship — capturing at 1280×720 only to downscale to 512 on the
-# Pi wasted ~4× the transfer+decode time and blew the 4s budget (measured 7.2s).
-CAPTURE_WIDTH = 640
-CAPTURE_HEIGHT = 360
+# v2 slideshow shows each effect FULLSCREEN, so the source needs ~display res (1024)
+# for sharpness — the old 640 (sized for the 1/3-cell grid) would look soft fullscreen.
+# Burst transfer at this res is the cost the streaming render is designed to hide.
+CAPTURE_WIDTH = 1024
+CAPTURE_HEIGHT = 576
 
 WIFI_SSID = "VIRUSDETECTED"
 WIFI_PASSWORD = "ifyaknowyakn0w!"
