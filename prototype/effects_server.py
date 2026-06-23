@@ -1,12 +1,14 @@
 """Effects server (replaces bg_removal_server.py).
 
 Runs on the Pi. On `POST /trigger`:
-  1. Pulls the last 30 frames from the MaixCam burst endpoint (one HTTP call, ~250KB ZIP).
-  2. Picks a random effect from the v1 palette and renders one image.
-  3. Saves it as static/latest.jpg and pushes an SSE 'replace' event to the viewer.
+  1. Pulls the burst from the MaixCam, saves a decimated copy as flipbook frames.
+  2. Pushes a `playlist-start` SSE event, then stream-renders each effect in the
+     roster, pushing an `append` event (with its image URL) as each completes.
+  3. The viewer loops/crossfades through the playlist until the next ring.
 
-No accumulation, no Replicate, no internet dependency. Same `effects.py` module
-runs here and on the Mac preview rig.
+Render outputs live in RAM (RENDER_DIR, tmpfs) — not the SD card. No accumulation,
+no Replicate, no internet dependency. Same `effects.py` module runs here and on the
+Mac preview rig.
 """
 
 from __future__ import annotations
@@ -32,16 +34,20 @@ PORT = 5050
 MAIXCAM_HOST = os.environ.get("MAIXCAM_HOST", "maixcam-288c.local")
 MAIXCAM_PORT = int(os.environ.get("MAIXCAM_PORT", "8080"))
 BURST_COUNT = int(os.environ.get("BURST_COUNT", "30"))
-# The MaixCam now captures full-res (sharp source). But rendering 9 effects per
-# press at full res would blow the ~4s budget on the Pi 3B+, and a 3-up grid of
-# full-res tiles is far bigger than the ~1024px display can show. So downscale
-# each burst frame to this longest-side cap first: ~512px tiles → ~1536px grid,
-# sharp on screen and fast to render. Tune via env without redeploying code.
-WORK_MAX_DIM = int(os.environ.get("WORK_MAX_DIM", "640"))
+# Each effect is shown fullscreen, so render at ~display res. The spike (2026-06-23)
+# confirmed ~1024px is feasible on the Pi 3B+ when streamed (see the design spec).
+WORK_MAX_DIM = int(os.environ.get("WORK_MAX_DIM", "1024"))
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
-LATEST_PATH = os.path.join(STATIC_DIR, "latest.jpg")
+
+# Per-ring render outputs live in RAM (tmpfs), NOT the SD card — regenerated every ring,
+# so writing them to the card would just wear it out and fight the go-live read-only
+# filesystem. /dev/shm is RAM-backed and present by default on Pi OS. Override with
+# RENDER_DIR for non-Pi dev. Recreated here on import, so it survives reboots/RAM clears.
+RENDER_DIR = os.environ.get("RENDER_DIR", "/dev/shm/imperfecta")
+FRAMES_DIR = os.path.join(RENDER_DIR, "frames")
+os.makedirs(FRAMES_DIR, exist_ok=True)
 # ────────────────────────────────────────────────────────────────────
 
 # Effect palette for the slideshow loop. Each entry is (display_name, callable);
@@ -75,44 +81,12 @@ EFFECT_PALETTE = [
 ]
 FLIPBOOK_KIND = "flipbook"   # viewer-rendered item, inserted into the playlist
 
-# Grid layout: render all 9 effects per press, composite into rows × cols.
-# Keeps each tile near its native source resolution (avoiding the 4×
-# upscale that made single fullscreen images pixelated).
-GRID_ROWS = 3
-GRID_COLS = 3
-
-
-def render_grid(frames: list[Image.Image]) -> tuple[Image.Image, list[tuple[str, float]]]:
-    """Render every effect from the same burst and composite into a grid.
-
-    Returns (composite_image, [(effect_name, ms), …]).
-    """
-    rendered: list[tuple[str, Image.Image, float]] = []
-    for name, fn in EFFECT_PALETTE:
-        t0 = time.perf_counter()
-        img = fn(frames)
-        ms = (time.perf_counter() - t0) * 1000
-        rendered.append((name, img, ms))
-
-    # All tiles snap to the source frame size for a clean uniform grid.
-    tile_w, tile_h = frames[0].size
-    composite = Image.new("RGB", (tile_w * GRID_COLS, tile_h * GRID_ROWS), (0, 0, 0))
-
-    for i, (_name, img, _ms) in enumerate(rendered):
-        if img.size != (tile_w, tile_h):
-            img = img.resize((tile_w, tile_h), Image.LANCZOS)
-        r, c = divmod(i, GRID_COLS)
-        composite.paste(img, (c * tile_w, r * tile_h))
-
-    return composite, [(n, ms) for (n, _img, ms) in rendered]
-
 # ── Flask app ───────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=STATIC_DIR)
 
 _trigger_lock = threading.Lock()    # serialize /trigger so two doorbells in a row don't collide
 _sse_clients: list[queue.Queue] = []
 _sse_lock = threading.Lock()
-_latest_token = "0"                  # cache-buster updated on each render
 
 
 def _scale_to_work(img: Image.Image) -> Image.Image:
@@ -147,6 +121,21 @@ def _pull_burst() -> list[Image.Image]:
     return frames
 
 
+def _save_burst_frames(frames: list[Image.Image], stride: int = 2) -> list[str]:
+    """Write a decimated copy of the burst to RENDER_DIR/frames/ for the flipbook.
+    Returns cache-busted URLs. stride=2 → ~15 frames from 30."""
+    import glob
+    for old in glob.glob(os.path.join(FRAMES_DIR, "*.jpg")):
+        os.remove(old)
+    urls = []
+    token = str(int(time.time() * 1000))
+    for i, f in enumerate(frames[::stride]):
+        name = f"f{i:03d}.jpg"
+        f.save(os.path.join(FRAMES_DIR, name), "JPEG", quality=82)
+        urls.append(f"/frames/{name}?t={token}")
+    return urls
+
+
 def _push_sse(event: str, data: dict) -> None:
     payload = f"event: {event}\ndata: {json.dumps(data)}\n\n"
     with _sse_lock:
@@ -165,11 +154,17 @@ def viewer():
     return send_from_directory(STATIC_DIR, "viewer.html")
 
 
-@app.route("/latest.jpg")
-def latest():
-    if not os.path.exists(LATEST_PATH):
-        return "no image yet", 404
-    return send_from_directory(STATIC_DIR, "latest.jpg")
+@app.route("/latest_<int:i>.jpg")
+def latest_n(i):
+    p = os.path.join(RENDER_DIR, f"latest_{i}.jpg")
+    if not os.path.exists(p):
+        return "no image", 404
+    return send_from_directory(RENDER_DIR, f"latest_{i}.jpg")
+
+
+@app.route("/frames/<path:name>")
+def frame(name):
+    return send_from_directory(FRAMES_DIR, name)
 
 
 @app.route("/events")
@@ -199,55 +194,50 @@ def events():
 
 @app.route("/trigger", methods=["POST"])
 def trigger():
-    """Doorbell handler: pull burst → run effect → save → push SSE."""
+    """Doorbell handler: pull burst → save flipbook frames → stream-render effects.
+
+    Pushes a `playlist-start` (with flipbook frame URLs) then one `append` per effect
+    as it finishes, so the viewer can start looping the new playlist while the rest
+    render. The viewer keeps showing the current loop until the first still arrives.
+    """
     if not _trigger_lock.acquire(blocking=False):
         return jsonify({"error": "busy"}), 429
-
-    global _latest_token
     try:
         overall = time.perf_counter()
         print(f"\n[{time.strftime('%H:%M:%S')}] trigger received")
 
-        # 1. Burst capture
         try:
             frames = _pull_burst()
         except Exception as e:
             print(f"  burst failed: {e}")
             return jsonify({"error": "burst", "detail": str(e)}), 502
-
         if not frames:
             return jsonify({"error": "empty burst"}), 502
 
-        # 2. Render all effects into a grid composite
-        t0 = time.perf_counter()
-        try:
-            composite, per_effect = render_grid(frames)
-        except Exception as e:
-            print(f"  render_grid raised: {e}")
-            return jsonify({"error": "render", "detail": str(e)}), 500
-        render_ms = (time.perf_counter() - t0) * 1000
-        slowest = max(per_effect, key=lambda x: x[1])
-        print(f"  rendered {len(per_effect)} effects in {render_ms:.0f}ms (slowest: {slowest[0]} {slowest[1]:.0f}ms)")
+        # Flipbook frames + new-playlist signal (no black gap: viewer keeps the old loop
+        # until the first still arrives).
+        flip_urls = _save_burst_frames(frames)
+        _push_sse("playlist-start", {"flipbook": flip_urls, "kind": FLIPBOOK_KIND})
 
-        # 3. Save (JPEG, quality 85 — small + fast)
-        t0 = time.perf_counter()
-        composite.save(LATEST_PATH, "JPEG", quality=85, optimize=False)
-        save_ms = (time.perf_counter() - t0) * 1000
-
-        # 4. SSE push with a cache-busting token
-        _latest_token = str(int(time.time() * 1000))
-        _push_sse("replace", {"url": f"/latest.jpg?t={_latest_token}", "grid": f"{GRID_ROWS}x{GRID_COLS}"})
+        # Stream-render stills one at a time; push each as it completes. A failing
+        # effect is skipped, not fatal.
+        for i, (name, fn) in enumerate(EFFECT_PALETTE):
+            try:
+                t0 = time.perf_counter()
+                img = fn(frames)
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(os.path.join(RENDER_DIR, f"latest_{i}.jpg"), "JPEG", quality=85)
+                token = str(int(time.time() * 1000))
+                _push_sse("append", {"index": i, "url": f"/latest_{i}.jpg?t={token}",
+                                     "kind": "still", "name": name})
+                print(f"  {name}: {(time.perf_counter() - t0) * 1000:.0f}ms")
+            except Exception as e:
+                print(f"  effect {name} failed, skipping: {e}")
 
         total_ms = (time.perf_counter() - overall) * 1000
-        print(f"  done: render {render_ms:.0f}ms, save {save_ms:.0f}ms, total {total_ms:.0f}ms")
-        return jsonify({
-            "ok": True,
-            "grid": f"{GRID_ROWS}x{GRID_COLS}",
-            "render_ms": round(render_ms, 1),
-            "save_ms": round(save_ms, 1),
-            "total_ms": round(total_ms, 1),
-            "per_effect_ms": {n: round(ms, 1) for (n, ms) in per_effect},
-        })
+        print(f"  done: {len(EFFECT_PALETTE)} stills, total {total_ms:.0f}ms")
+        return jsonify({"ok": True, "stills": len(EFFECT_PALETTE), "total_ms": round(total_ms, 1)})
     finally:
         _trigger_lock.release()
 
