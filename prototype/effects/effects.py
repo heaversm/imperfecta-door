@@ -111,6 +111,35 @@ def echo_max(frames: list[Image.Image]) -> Image.Image:
     return Image.fromarray(out)
 
 
+@_timed
+def echo_trails(
+    frames: list[Image.Image],
+    current_weight: float = 0.65,
+    decay: float = 2.5,
+) -> Image.Image:
+    """Latest frame on top (fairly crisp), with fainter, decaying ghost trails of
+    earlier positions behind it.
+
+      current_weight — how dominant the latest frame is (higher = crisper "now").
+      decay          — how fast older trails fade (higher = fainter older trails).
+
+    On a static background the figure's current position reads clearly while past
+    positions show as faint echoes — unlike echo_max, which smears abstractly.
+    """
+    stack = _stack(frames).astype(np.float32)
+    n = stack.shape[0]
+    if n == 1:
+        return Image.fromarray(stack[0].astype(np.uint8))
+    # Trail weights for the older frames, summing to (1 - current_weight); most recent
+    # trail brightest, oldest faintest. Latest frame gets current_weight.
+    t = np.linspace(0.0, 1.0, n - 1)
+    tw = t ** decay
+    tw = tw / tw.sum() * (1.0 - current_weight)
+    w = np.concatenate([tw, [current_weight]])
+    out = np.tensordot(w, stack, axes=([0], [0]))
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
 # ─── Time grid mosaic ──────────────────────────────────────────────────────
 
 @_timed
@@ -144,6 +173,8 @@ def hockney_joiner(
     jitter_frac: float = 0.08,
     border_px: int = 6,
     bg_color: tuple[int, int, int] = (180, 200, 215),
+    pad_frac: float = 0.25,
+    bleed_frac: float = 0.125,
     seed: int | None = None,
 ) -> Image.Image:
     """Hockney-style photo joiner: bordered tiles, rotated, jittered, overlapping.
@@ -164,14 +195,15 @@ def hockney_joiner(
     stack = _stack(frames)
     n, h, w, _ = stack.shape
 
-    # Canvas larger than source so rotated/jittered tiles don't clip
-    pad = int(max(h, w) * 0.25)
+    # Canvas margin around the source. Small pad → tiles fill the frame and edge tiles
+    # clip off-canvas (intentional: maximizes tile size, minimizes background).
+    pad = int(max(h, w) * pad_frac)
     canvas = Image.new("RGB", (w + 2 * pad, h + 2 * pad), bg_color)
 
     cell_h = h // rows
     cell_w = w // cols
-    # Bleed each tile slightly past its cell so neighbors overlap pleasingly
-    bleed = max(cell_h, cell_w) // 8
+    # Bleed each tile past its cell so neighbors overlap and cover the background.
+    bleed = int(max(cell_h, cell_w) * bleed_frac)
 
     n_cells = rows * cols
     for r in range(rows):

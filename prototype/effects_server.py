@@ -55,10 +55,10 @@ os.makedirs(FRAMES_DIR, exist_ok=True)
 # The B&W distortion family shares _bw_treatment; warhol/lichtenstein/mondrian stay color.
 _bw = effects._bw_treatment
 
-def _slit_v(frames): return _bw(effects.slitscan_vertical(frames)[0])
-def _emax(frames):   return _bw(effects.echo_max(frames)[0])
+def _slit_h(frames): return _bw(effects.slitscan_horizontal(frames)[0])
+def _echo(frames):   return _bw(effects.echo_trails(frames)[0])
 def _liq(frames):    return _bw(effects.liquify(frames[len(frames) // 2], wave_amp=30, wave_freq=4, bulge=0.5, twirl_deg=45)[0])
-def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10)[0])
+def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, rotation_max_deg=12, jitter_frac=0.12, border_px=10, pad_frac=0.04, bleed_frac=0.38)[0])
 def _slice(frames):  return effects.slice_displacement(frames)[0]      # B&W internally
 def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
 def _warhol(frames): return effects.warhol(frames)[0]                  # color
@@ -73,9 +73,9 @@ EFFECT_PALETTE = [
     ("slice displacement", _slice),
     ("lichtenstein",       _licht),
     ("water refraction",   _water),
-    ("slitscan vertical",  _slit_v),
+    ("slitscan horizontal", _slit_h),
     ("mondrian",           _mond),
-    ("echo",               _emax),
+    ("echo",               _echo),
     ("liquify",            _liq),
     ("hockney",            _hock),      # ~1.6s — render LAST
 ]
