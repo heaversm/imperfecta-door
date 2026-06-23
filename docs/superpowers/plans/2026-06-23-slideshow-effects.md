@@ -241,17 +241,19 @@ def _warhol(frames): return effects.warhol(frames)[0]                  # color
 def _licht(frames):  return effects.lichtenstein(frames)[0]            # color
 def _mond(frames):   return effects.mondrian(frames)[0]                # color
 
-# Order = loop order. "flipbook" is handled by the viewer, not rendered here.
+# Order = render order = loop order. Spike (2026-06-23) showed hockney is a 1.6s outlier
+# at 1024px, so it renders LAST (a cheap effect leads so the first image lands inside the
+# 5s WLED ring). Color/B&W interleaved for visual variety. flipbook = viewer-rendered.
 EFFECT_PALETTE = [
-    ("slitscan vertical",   _slit_v),
+    ("warhol",              _warhol),   # ~150ms — cheap, punchy first image
     ("slice displacement",  _slice),
-    ("warhol",              _warhol),
-    ("water refraction",    _water),
-    ("echo",                _emax),
     ("lichtenstein",        _licht),
-    ("liquify",             _liq),
+    ("water refraction",    _water),
+    ("slitscan vertical",   _slit_v),
     ("mondrian",            _mond),
-    ("hockney",             _hock),
+    ("echo",                _emax),
+    ("liquify",             _liq),
+    ("hockney",             _hock),      # ~1.6s — render LAST
 ]
 FLIPBOOK_KIND = "flipbook"   # viewer-rendered item, inserted into the playlist
 ```

@@ -114,6 +114,13 @@ New effects land in this range; flipbook ≈ 0 render. Burst fetch+decode: 640×
 > ~6s, or total render starves the loop), adjust capture res / work res / roster before
 proceeding. Do not build the full roster on estimates.
 
+**Spike result (2026-06-23, ran on the Pi @1024px) — PASS:** mondrian 16ms, warhol 153ms,
+lichtenstein 472ms, liquify 601ms, echo 632ms, slitscan_v 712ms, **hockney 1583ms** (outlier);
+7 effects = 4169ms. Full ~9-still roster ≈ ~5.5-6s incl. new effects + B&W treatment; burst
+at 1024 ≈ ~3s. Streamed with a cheap effect first, first image ≈ ~3.2s (inside the 5s WLED
+ring); the ~36s loop cycle never starves the ~6s render. **Refinement adopted:** render order
+is cheap-first / **hockney last** so the first image isn't delayed by the outlier.
+
 ## Build order
 
 1. **Measurement spike** — on the Pi: capture at 1024×576, render the existing effects at
