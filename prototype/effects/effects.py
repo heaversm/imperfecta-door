@@ -61,6 +61,16 @@ def _numpy_remap(arr: np.ndarray, src_x: np.ndarray, src_y: np.ndarray) -> np.nd
     return arr[yi, xi]
 
 
+def _bw_treatment(img: Image.Image, grain: float = 0.10, seed: int | None = None) -> Image.Image:
+    """Shared B&W-distortion-family look: grayscale → contrast stretch → film grain."""
+    g = ImageOps.autocontrast(img.convert("L"), cutoff=1)
+    arr = np.asarray(g).astype(np.float32)
+    if grain > 0:
+        rng = np.random.default_rng(seed)
+        arr = np.clip(arr + rng.normal(0.0, 255.0 * grain, arr.shape), 0, 255)
+    return Image.fromarray(arr.astype(np.uint8)).convert("RGB")
+
+
 # ─── Slitscan ──────────────────────────────────────────────────────────────
 
 @_timed
@@ -445,5 +455,51 @@ def mondrian(
         draw.rectangle((x0, y0, x1 - 1, y1 - 1), outline=line_color, width=line_width)
 
     return canvas
+
+
+# ─── Slice displacement ──────────────────────────────────────────────────────
+
+@_timed
+def slice_displacement(
+    frames: list[Image.Image],
+    n_bands: int = 16,
+    max_shift_frac: float = 0.18,
+    seed: int | None = None,
+) -> Image.Image:
+    """Cut the frame into vertical bands; offset each band vertically by a random
+    amount → fractured, shuffled-strips look (the 'Dia 6' reference). B&W."""
+    rng = random.Random(seed)
+    src = _bw_treatment(_middle_frame(frames), seed=seed)
+    arr = np.asarray(src)
+    h, w, _ = arr.shape
+    out = np.zeros_like(arr)
+    band_w = max(1, w // n_bands)
+    max_shift = int(h * max_shift_frac)
+    for i in range(n_bands):
+        x0 = i * band_w
+        x1 = w if i == n_bands - 1 else (i + 1) * band_w
+        shift = rng.randint(-max_shift, max_shift)
+        out[:, x0:x1] = np.roll(arr[:, x0:x1], shift, axis=0)
+    return Image.fromarray(out)
+
+
+# ─── Water refraction ────────────────────────────────────────────────────────
+
+@_timed
+def water_refraction(
+    frames: list[Image.Image],
+    amp: float = 12.0,
+    freq: float = 6.0,
+    seed: int | None = None,
+) -> Image.Image:
+    """Crossing-sine ripple displacement field warped through _numpy_remap →
+    underwater refraction. B&W."""
+    src = _bw_treatment(_middle_frame(frames), seed=seed)
+    arr = np.asarray(src)
+    h, w, _ = arr.shape
+    ys, xs = np.indices((h, w), dtype=np.float32)
+    src_x = xs + amp * np.sin(2 * np.pi * freq * ys / h + xs / w * 3.0)
+    src_y = ys + amp * np.cos(2 * np.pi * freq * xs / w + ys / h * 3.0)
+    return Image.fromarray(_numpy_remap(arr, src_x, src_y))
 
 
