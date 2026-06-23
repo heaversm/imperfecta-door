@@ -62,7 +62,7 @@ def _hock(frames):   return _bw(effects.hockney_joiner(frames, rows=3, cols=3, r
 def _slice(frames):  return effects.slice_displacement(frames)[0]      # B&W internally
 def _water(frames):  return effects.water_refraction(frames)[0]        # B&W internally
 def _warhol(frames): return effects.warhol(frames)[0]                  # color
-def _licht(frames):  return effects.lichtenstein(frames, dot_spacing=10, edge_threshold=45)[0]  # color, finer dots + more edges
+def _halftone(frames): return effects.halftone(frames)[0]   # pop halftone (rebuilt lichtenstein)
 def _mond(frames):   return effects.mondrian(frames)[0]                # color
 
 # Order = render order = loop order. The spike (2026-06-23) showed hockney is a 1.6s
@@ -71,7 +71,7 @@ def _mond(frames):   return effects.mondrian(frames)[0]                # color
 EFFECT_PALETTE = [
     ("warhol",             _warhol),   # ~150ms — cheap, punchy first image
     ("slice displacement", _slice),
-    ("lichtenstein",       _licht),
+    ("halftone",           _halftone),
     ("water refraction",   _water),
     ("slitscan horizontal", _slit_h),
     ("mondrian",           _mond),

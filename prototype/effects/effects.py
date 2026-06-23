@@ -466,7 +466,7 @@ def mondrian(
         key=lambda i: ((rects[i][0] + rects[i][2]) / 2 - cx_img) ** 2
                       + ((rects[i][1] + rects[i][3]) / 2 - cy_img) ** 2,
     )
-    face_prob = 0.45  # ~45% of cells show face; rest are primary-color panels
+    face_prob = 0.55  # most cells show the face; the rest show a color-tinted face crop
 
     # Decide upfront which cells are face vs colored
     face_set = {center_idx}
@@ -488,7 +488,12 @@ def mondrian(
         if i in face_set:
             canvas.paste(src.crop((x0, y0, x1, y1)), (x0, y0))
         else:
-            draw.rectangle((x0, y0, x1 - 1, y1 - 1), fill=color)
+            # Color-tinted face crop instead of a solid block — the photo shows through
+            # the red/blue/yellow/white wash, so the composition stays image-forward
+            # while keeping the Mondrian color structure.
+            crop = src.crop((x0, y0, x1, y1)).convert("RGB")
+            tint = Image.new("RGB", crop.size, color)
+            canvas.paste(Image.blend(crop, tint, 0.5), (x0, y0))
 
     # Borders drawn last so they sit over the fills + face crops
     for (x0, y0, x1, y1, _) in rects:
@@ -570,5 +575,38 @@ def dither(
     else:
         d = g.convert("1")
     return d.convert("RGB")
+
+
+# ─── Halftone (pop / Lichtenstein, rebuilt) ──────────────────────────────────
+
+@_timed
+def halftone(
+    frames: list[Image.Image],
+    dot_spacing: int = 7,
+    dot_color: tuple[int, int, int] = (200, 30, 35),
+    bg: tuple[int, int, int] = (245, 238, 230),
+    ink: tuple[int, int, int] = (15, 15, 15),
+    shadow_cut: int = 45,
+    edge_threshold: int = 60,
+) -> Image.Image:
+    """True tonal halftone: Ben-Day dots SIZED by local darkness, so the face's form is
+    carried by dot density and reads clearly. Pop palette — red dots on cream, deep
+    shadows inked solid black (hair etc.), bold black contour lines. Replaces the old
+    flat-threshold lichtenstein, which collapsed faces into a single color blob.
+    """
+    src = _middle_frame(frames)
+    gray = np.asarray(ImageOps.autocontrast(src.convert("L"), cutoff=2))
+    h, w = gray.shape
+    out = np.empty((h, w, 3), dtype=np.uint8)
+    out[:] = bg
+    dots = _halftone_dots(gray, dot_spacing=dot_spacing)   # 0 where dot ink lives
+    out[dots == 0] = dot_color
+    out[gray < shadow_cut] = ink                           # deep shadows → solid ink
+    # Bold black contour lines for the comic-ink feel.
+    edges = src.convert("L").filter(ImageFilter.SMOOTH).filter(ImageFilter.FIND_EDGES)
+    em = np.asarray(edges) > edge_threshold
+    eimg = Image.fromarray((em.astype(np.uint8) * 255)).filter(ImageFilter.MaxFilter(3))
+    out[np.asarray(eimg) > 0] = ink
+    return Image.fromarray(out)
 
 
