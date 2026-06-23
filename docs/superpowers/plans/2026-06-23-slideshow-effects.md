@@ -292,7 +292,13 @@ In the config block, change `WORK_MAX_DIM` default to `1024` (or the spike-chose
 ```python
 WORK_MAX_DIM = int(os.environ.get("WORK_MAX_DIM", "1024"))
 SLIDE_COUNT = len(EFFECT_PALETTE)  # stills; flipbook added on top
-FRAMES_DIR = os.path.join(STATIC_DIR, "frames")
+# Ephemeral render outputs live in RAM (tmpfs), NOT on the SD card. They're regenerated
+# every ring, so writing ~24 JPEGs/ring to the card all day would just wear it out (the
+# first card already died) and fight the go-live read-only filesystem. /dev/shm is
+# RAM-backed and present by default on Pi OS. viewer.html stays in STATIC_DIR (deployed,
+# not per-ring).
+RENDER_DIR = os.environ.get("RENDER_DIR", "/dev/shm/imperfecta")
+FRAMES_DIR = os.path.join(RENDER_DIR, "frames")
 os.makedirs(FRAMES_DIR, exist_ok=True)
 ```
 
@@ -349,7 +355,7 @@ def trigger():
                 img = fn(frames)
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-                path = os.path.join(STATIC_DIR, f"latest_{i}.jpg")
+                path = os.path.join(RENDER_DIR, f"latest_{i}.jpg")
                 img.save(path, "JPEG", quality=85)
                 ms = (time.perf_counter() - t0) * 1000
                 token = str(int(time.time() * 1000))
@@ -373,8 +379,8 @@ Add routes (the single `latest.jpg` route can stay for back-compat or be removed
 ```python
 @app.route("/latest_<int:i>.jpg")
 def latest_n(i):
-    p = os.path.join(STATIC_DIR, f"latest_{i}.jpg")
-    return send_from_directory(STATIC_DIR, f"latest_{i}.jpg") if os.path.exists(p) else ("no image", 404)
+    p = os.path.join(RENDER_DIR, f"latest_{i}.jpg")
+    return send_from_directory(RENDER_DIR, f"latest_{i}.jpg") if os.path.exists(p) else ("no image", 404)
 
 @app.route("/static/frames/<path:name>")
 def frame(name):
@@ -557,7 +563,22 @@ ssh imperfecta-pi '~/shutdown'   # power-cycle, then watch the screen
 ```
 Expected: boots straight into the experience (black loading page → looping slideshow), no desktop, no blank.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: One-time legacy cleanup + confirm tmpfs render dir**
+
+The retired `bg_removal` pipeline accumulated face captures under `~/static/`. List first,
+then remove the legacy artifacts (leave `viewer.html` and the new tmpfs render dir alone):
+```bash
+# Inspect what's there before deleting anything
+ssh imperfecta-pi 'ls -la ~/static/ ~/static/captures 2>/dev/null; du -sh ~/static 2>/dev/null'
+# Remove legacy accumulated captures (adjust to what the listing shows)
+ssh imperfecta-pi 'rm -rf ~/static/captures ~/static/faces 2>/dev/null; rm -f ~/static/latest.jpg'
+# Confirm render outputs are in RAM (tmpfs), not on the card
+ssh imperfecta-pi 'df -h /dev/shm; ls -la /dev/shm/imperfecta/ /dev/shm/imperfecta/frames/ | head'
+```
+Expected: `/dev/shm/imperfecta/` holds `latest_*.jpg` + `frames/`; `~/static/` holds only
+`viewer.html`. No accumulating capture files anywhere.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add maixcam/face_capture/face_capture_multi_server.py
@@ -572,4 +593,7 @@ git commit -m "Bump MaixCam capture to 1024x576 for fullscreen slideshow sharpne
 - Flipbook plays the burst back as motion.
 - B&W distortion family reads cohesively next to warhol/lichtenstein/mondrian.
 - Sustained CPU ≈ 0 between rings; `vcgencmd get_throttled` = 0x0.
+- **Storage:** render outputs in `/dev/shm` (RAM), not the SD card; footprint constant
+  across many rings (no accumulation); legacy captures removed. `/dev/shm/imperfecta` is
+  recreated on service start (`os.makedirs` at import), so it survives reboots/RAM clears.
 - Cold-boot regression passes.

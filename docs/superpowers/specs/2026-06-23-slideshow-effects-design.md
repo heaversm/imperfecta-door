@@ -133,6 +133,26 @@ proceeding. Do not build the full roster on estimates.
 - SSE connection drops → existing viewer self-heal (reload on close / 20s no-connect).
 - Cold-boot kiosk behavior (loading page → viewer) is unchanged and must still pass.
 
+## Storage & cleanup
+
+**Bounded by design — nothing accumulates.** Per-ring outputs reuse fixed names:
+`latest_0.jpg`…`latest_<N-1>.jpg` overwrite each ring, and the flipbook frames dir is
+wiped before each new capture. The total on-disk footprint is constant (~9 stills + ~15
+frames ≈ a few MB), regardless of how many times the doorbell is pressed.
+
+**Render outputs live in RAM, not on the SD card.** Writing ~24 JPEGs per ring to the SD
+card all day for weeks is real write-wear (the first card already died). So the ephemeral
+render outputs (`latest_*.jpg`, flipbook `frames/`) are written to a **tmpfs at
+`/dev/shm/imperfecta/`** (RAM-backed, present by default on Pi OS) and Flask serves them
+from there. They never need to persist — they're regenerated on the next ring. This also
+makes the go-live read-only overlay filesystem seamless: these writes are already in RAM,
+so nothing conflicts with a read-only root.
+
+**Legacy cleanup (one-time):** the retired `bg_removal_server.py` pipeline accumulated
+face captures under `~/static/`. With the effects pipeline these are obsolete; delete any
+leftover legacy capture files once (see plan Task 6). RUNBOOK §3 ("clearing the gallery")
+no longer applies.
+
 ## Verification
 - Spike: per-effect render ms + burst time logged on the Pi; streaming timeline confirmed.
 - Visual: on the gallery display, ring → fullscreen effects crossfade and loop; flipbook
