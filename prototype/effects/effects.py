@@ -125,19 +125,27 @@ def echo_trails(
 
     On a static background the figure's current position reads clearly while past
     positions show as faint echoes — unlike echo_max, which smears abstractly.
+
+    Accumulates one frame at a time (peak ~2 frames in float32) rather than stacking
+    all N as float32 — a full 30-frame float32 stack at 1024px is ~200MB and thrashes
+    the Pi 3B+'s 1GB RAM into swap (measured 14s before this fix).
     """
-    stack = _stack(frames).astype(np.float32)
-    n = stack.shape[0]
+    n = len(frames)
     if n == 1:
-        return Image.fromarray(stack[0].astype(np.uint8))
+        return frames[0].convert("RGB")
     # Trail weights for the older frames, summing to (1 - current_weight); most recent
     # trail brightest, oldest faintest. Latest frame gets current_weight.
     t = np.linspace(0.0, 1.0, n - 1)
     tw = t ** decay
     tw = tw / tw.sum() * (1.0 - current_weight)
     w = np.concatenate([tw, [current_weight]])
-    out = np.tensordot(w, stack, axes=([0], [0]))
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+    base = np.asarray(frames[0].convert("RGB"))
+    acc = np.zeros(base.shape, dtype=np.float32)
+    for i, f in enumerate(frames):
+        arr = base if i == 0 else np.asarray(f.convert("RGB"))
+        acc += w[i] * arr
+    return Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8))
 
 
 # ─── Time grid mosaic ──────────────────────────────────────────────────────
