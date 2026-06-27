@@ -49,14 +49,12 @@
     position: fixed; inset: 0; background: #fff;
     opacity: 0; pointer-events: none; z-index: 50;
   }
-  @keyframes doubleflash {
-    0%, 100% { opacity: 0; }
-    4%  { opacity: 1; }
-    18% { opacity: 0; }
-    34% { opacity: 1; }
-    48% { opacity: 0; }
+  @keyframes camflash {
+    0%   { opacity: 0; }
+    6%   { opacity: 1; }   /* quick snap to full white (~70ms) */
+    100% { opacity: 0; }   /* slow fade over the remaining ~1.1s */
   }
-  #flash.fire { animation: doubleflash 600ms ease-out; }
+  #flash.fire { animation: camflash 1200ms ease-out; }
 </style>
 </head>
 <body>
