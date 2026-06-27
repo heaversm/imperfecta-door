@@ -181,6 +181,10 @@ def trigger():
         overall = time.perf_counter()
         print(f"\n[{time.strftime('%H:%M:%S')}] trigger received")
 
+        # Instant feedback: fire the on-screen flash the moment the trigger lands — before
+        # the ~3s burst+render — so the visitor immediately sees they did something.
+        _push_sse("flash", {})
+
         try:
             frames = _pull_burst()
         except Exception as e:

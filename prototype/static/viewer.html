@@ -26,7 +26,7 @@
     position: absolute;
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: cover;   /* fill the whole screen (crops a sliver if aspect differs) — no black bars */
     opacity: 0;
     transition: opacity 600ms ease-in-out;
   }
@@ -44,6 +44,19 @@
     opacity: 0.5;
   }
   #status.live { background: #2a2; }
+  /* Camera-flash overlay — double strobe fired the instant the trigger lands. */
+  #flash {
+    position: fixed; inset: 0; background: #fff;
+    opacity: 0; pointer-events: none; z-index: 50;
+  }
+  @keyframes doubleflash {
+    0%, 100% { opacity: 0; }
+    4%  { opacity: 1; }
+    18% { opacity: 0; }
+    34% { opacity: 1; }
+    48% { opacity: 0; }
+  }
+  #flash.fire { animation: doubleflash 600ms ease-out; }
 </style>
 </head>
 <body>
@@ -52,11 +65,13 @@
   <img id="b" alt="">
 </div>
 <div id="status"></div>
+<div id="flash"></div>
 
 <script>
 const a = document.getElementById('a');
 const b = document.getElementById('b');
 const status = document.getElementById('status');
+const flash = document.getElementById('flash');
 let front = a, back = b;
 
 const SLIDE_MS = 4000;     // dwell per still
@@ -70,6 +85,13 @@ let idx = 0;
 let everConnected = false;
 
 function preload(urls) { urls.forEach(u => { const im = new Image(); im.src = u; }); }
+
+function doFlash() {
+  // Restart the CSS animation (remove → force reflow → re-add) so repeated triggers re-fire.
+  flash.classList.remove('fire');
+  void flash.offsetWidth;
+  flash.classList.add('fire');
+}
 
 function showStill(url) {
   // Preload into the back layer, then crossfade.
@@ -128,6 +150,7 @@ function connect() {
     // CONNECTING (0): auto-reconnecting, leave it. CLOSED (2): gave up — reload to recover.
     if (es.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 3000);
   };
+  es.addEventListener('flash', doFlash);   // instant double-strobe on trigger
   es.addEventListener('playlist-start', (e) => {
     const d = JSON.parse(e.data);
     building = [];   // start assembling a new playlist; keep looping the current one
