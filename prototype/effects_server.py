@@ -23,8 +23,8 @@ import time
 import zipfile
 
 import requests
-from flask import Flask, Response, jsonify, send_from_directory
-from PIL import Image
+from flask import Flask, Response, jsonify, request, send_from_directory
+from PIL import Image, ImageFilter
 
 import effects
 
@@ -87,7 +87,12 @@ def _pull_burst() -> list[Image.Image]:
                 # Decode JPEG → PIL Image, force load into memory so the zip handle can close.
                 img = Image.open(f)
                 img.load()
-                frames.append(_scale_to_work(img.convert("RGB")))
+                # Mild unsharp once on decode → crisps the soft sensor output for the flipbook
+                # AND every downstream effect (they all start from these frames). Gentle so it
+                # doesn't crunch JPEG noise; dial percent down if it looks over-sharpened.
+                rgb = _scale_to_work(img.convert("RGB"))
+                rgb = rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+                frames.append(rgb)
     decode_ms = (time.perf_counter() - t0) * 1000 - fetch_ms
     print(f"  burst: fetched {len(frames)} frames in {fetch_ms:.0f}ms, decoded in {decode_ms:.0f}ms")
     return frames
@@ -127,6 +132,14 @@ def _push_sse(event: str, data: dict) -> None:
 @app.route("/")
 def viewer():
     return send_from_directory(STATIC_DIR, "viewer.html")
+
+
+@app.route("/first.jpg")
+def first_jpg():
+    p = os.path.join(RENDER_DIR, "first.jpg")
+    if not os.path.exists(p):
+        return "no image", 404
+    return send_from_directory(RENDER_DIR, "first.jpg")
 
 
 @app.route("/latest_<int:i>.jpg")
@@ -185,6 +198,20 @@ def trigger():
         # the ~3s burst+render — so the visitor immediately sees they did something.
         _push_sse("flash", {})
 
+        # Instant static first photo: one /photo frame (fast — single shot, not the 30-frame
+        # burst) shown the moment it lands, with NO motion on it, so a real photo appears right
+        # away while the burst + effects render behind it and then take over the loop.
+        try:
+            r = requests.get(f"http://{MAIXCAM_HOST}:{MAIXCAM_PORT}/photo", timeout=4.0)
+            if r.ok:
+                pimg = _scale_to_work(Image.open(io.BytesIO(r.content)).convert("RGB"))
+                pimg = pimg.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+                pimg.save(os.path.join(RENDER_DIR, "first.jpg"), "JPEG", quality=88)
+                _push_sse("first", {"url": f"/first.jpg?t={int(time.time() * 1000)}"})
+                print("  first photo pushed")
+        except Exception as e:
+            print(f"  quick first photo failed (non-fatal): {e}")
+
         try:
             frames = _pull_burst()
         except Exception as e:
@@ -193,10 +220,12 @@ def trigger():
         if not frames:
             return jsonify({"error": "empty burst"}), 502
 
-        # Flipbook frames + new-playlist signal (no black gap: viewer keeps the old loop
-        # until the first still arrives).
-        flip_urls = _save_burst_frames(frames)
-        _push_sse("playlist-start", {"flipbook": flip_urls, "kind": FLIPBOOK_KIND})
+        # New-playlist signal. The raw-burst flipbook is intentionally NOT shown anymore —
+        # frame-by-frame playback is jerky on the Pi; the screen is now smooth stills (Ken
+        # Burns / slitscan sweep) plus the Mondrian shuffle clip. We still call this to clear
+        # stale render outputs from the previous ring.
+        _save_burst_frames(frames)
+        _push_sse("playlist-start", {"flipbook": [], "kind": FLIPBOOK_KIND})
 
         # 1) Stream-render stills one at a time; push each as it completes (a failing
         #    effect is skipped, not fatal).
@@ -223,7 +252,7 @@ def trigger():
                 t0 = time.perf_counter()
                 urls = []
                 for j, fr in enumerate(window):
-                    img = fn([fr], 1000 + k)
+                    img = fn([fr], 1000 + k, j)
                     if img.mode != "RGB":
                         img = img.convert("RGB")
                     fname = f"clip{k}_{j}.jpg"
@@ -233,6 +262,10 @@ def trigger():
                 print(f"  {name} (clip x{len(urls)}): {(time.perf_counter() - t0) * 1000:.0f}ms")
             except Exception as e:
                 print(f"  living effect {name} failed, skipping: {e}")
+
+        # Cap the playlist with a text-prompt card (shown as the divider before each
+        # repeat) — the viewer appends an Oblique Strategies card on this signal.
+        _push_sse("playlist-end", {})
 
         total_ms = (time.perf_counter() - overall) * 1000
         print(f"  done: {len(STILL_PALETTE)} stills + {len(ANIM_PALETTE)} clips, total {total_ms:.0f}ms")
@@ -244,6 +277,28 @@ def trigger():
 
 @app.route("/health")
 def health():
+    return "ok"
+
+
+@app.route("/shader")
+def shader():
+    """Standalone WebGL melty/wobble shader prototype (perf test on the Pi 3B+)."""
+    return send_from_directory(STATIC_DIR, "shader_test.html")
+
+
+@app.route("/goto", methods=["POST"])
+def goto():
+    """Push every connected page to a URL (e.g. flip the kiosk to /shader and back to /)."""
+    _push_sse("goto", {"url": request.args.get("url", "/")})
+    return "ok"
+
+
+@app.route("/reload", methods=["POST"])
+def reload_viewers():
+    """Tell every connected viewer to reload the page — lets a viewer.html deploy take
+    effect without rebooting the Pi (the kiosk browser otherwise just reconnects the SSE
+    stream onto the stale page)."""
+    _push_sse("reload", {})
     return "ok"
 
 

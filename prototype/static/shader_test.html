@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imperfecta — shader test</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; cursor: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; top: 8px; left: 8px; z-index: 10;
+    color: #0f0; font: 14px/1.4 monospace; white-space: pre;
+    background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 4px;
+  }
+  #msg {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    color: #fff; font: 22px sans-serif; text-align: center; padding: 6vw;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">init…</div>
+<div id="msg"></div>
+
+<script>
+// PROTOTYPE: melty/wobble displacement shader on a captured still, to gauge whether
+// real-time GPU distortion runs smoothly on the Pi 3B+. The HUD shows live FPS.
+const cv = document.getElementById('c');
+const hud = document.getElementById('hud');
+const msg = document.getElementById('msg');
+
+function fail(t) { msg.style.display = 'flex'; msg.textContent = t; hud.textContent = t; }
+
+const gl = cv.getContext('webgl') || cv.getContext('experimental-webgl');
+if (!gl) fail('WebGL not available on this device');
+
+const VS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = vec2((a_pos.x + 1.0) / 2.0, (1.0 - a_pos.y) / 2.0);  // flip Y for image orientation
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+// Layered sine displacement + a slow large-scale swell → a watery "melt" whose
+// amplitude and position drift over time. Driven entirely by u_time → perfectly smooth.
+const FS = `
+precision mediump float;
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform vec2 u_cover;   // cover-fit scale (crop the overflowing axis)
+void main() {
+  vec2 uv = (v_uv - 0.5) * u_cover + 0.5;
+  float t = u_time;
+  vec2 d;
+  d.x = sin(uv.y * 10.0 + t * 1.3) * 0.012 + sin(uv.y * 23.0 - t * 0.7) * 0.006;
+  d.y = cos(uv.x * 12.0 + t * 1.1) * 0.012 + cos(uv.x * 19.0 + t * 0.9) * 0.006;
+  d += 0.010 * vec2(sin(t * 0.5 + uv.x * 3.0), cos(t * 0.4 + uv.y * 3.0));
+  gl_FragColor = texture2D(u_tex, clamp(uv + d, 0.0, 1.0));
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { fail('shader compile: ' + gl.getShaderInfoLog(s)); }
+  return s;
+}
+
+let prog, locPos, locTime, locCover, imgAspect = 1;
+
+function initGL() {
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { fail('link: ' + gl.getProgramInfoLog(prog)); return; }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+  locPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(locPos);
+  gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
+
+  locTime = gl.getUniformLocation(prog, 'u_time');
+  locCover = gl.getUniformLocation(prog, 'u_cover');
+}
+
+function makeTexture(img) {
+  imgAspect = img.naturalWidth / img.naturalHeight;
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  // NPOT-safe params (no mipmaps, clamp).
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+}
+
+function resize() {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w; cv.height = h;
+  gl.viewport(0, 0, w, h);
+}
+
+// Cover-fit: crop the axis that overflows so the image fills the screen (no bars).
+function cover() {
+  const ca = cv.width / cv.height;
+  return ca > imgAspect ? [1, imgAspect / ca] : [ca / imgAspect, 1];
+}
+
+let frames = 0, fpsT0 = 0, fps = 0, startT = 0;
+function render(now) {
+  if (!startT) { startT = now; fpsT0 = now; }
+  const t = (now - startT) / 1000;
+  const cv2 = cover();
+  gl.uniform1f(locTime, t);
+  gl.uniform2f(locCover, cv2[0], cv2[1]);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  frames++;
+  if (now - fpsT0 >= 500) {
+    fps = Math.round((frames * 1000) / (now - fpsT0));
+    frames = 0; fpsT0 = now;
+    hud.textContent = `FPS: ${fps}\n${cv.width}×${cv.height}`;
+  }
+  requestAnimationFrame(render);
+}
+
+// Pull the first available captured still; if none yet, ask for a ring.
+const CANDIDATES = ['/first.jpg', '/latest_0.jpg', '/latest_1.jpg', '/latest_2.jpg'];
+function loadFirstAvailable(i) {
+  if (i >= CANDIDATES.length) { fail('No captured photo found.\nRing the bell once, then reload.'); return; }
+  const img = new Image();
+  img.onload = () => { if (!gl) return; makeTexture(img); resize(); requestAnimationFrame(render); };
+  img.onerror = () => loadFirstAvailable(i + 1);
+  img.src = CANDIDATES[i] + '?t=' + Date.now();
+}
+
+if (gl) {
+  initGL();
+  window.addEventListener('resize', resize);
+  loadFirstAvailable(0);
+}
+
+// Stay reachable: let the server flip us back to the viewer (or reload) over SSE.
+const es = new EventSource('/events');
+es.addEventListener('goto', (e) => { location.href = JSON.parse(e.data).url; });
+es.addEventListener('reload', () => location.reload());
+</script>
+</body>
+</html>

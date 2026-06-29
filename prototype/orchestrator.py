@@ -23,6 +23,7 @@ End-to-end flow:
 from __future__ import annotations
 
 import base64
+import socket
 import sys
 import time
 import threading
@@ -67,9 +68,8 @@ RF_BURST_MIN_DURATION_MS = 150  # presses run 237+, with margin
 RF_BURST_MAX_DURATION_MS = 400  # rejects the ~950ms periodic transmitter
 COOLDOWN_SECONDS = 5.0          # Debounce / cooldown between triggers; matches WLED_RING_DURATION to avoid ring-thread races
 REQUEST_TIMEOUT = 10.0          # HTTP request timeout
-WLED_RING_DURATION = 5.0        # Seconds to play ring animation before turning off
-WLED_AMBIENT_INTERVAL = 30.0    # Seconds between ambient animation triggers
-WLED_AMBIENT_DURATION = 30.0    # Seconds to play ambient animation before turning off
+WLED_RING_DURATION = 5.0        # Seconds to play the ring chase before returning to ambient
+# Ambient now runs continuously (set once, WLED animates it) — no on/off cycle constants.
 # ────────────────────────────────────────────────────────────────────
 
 
@@ -105,60 +105,75 @@ def capture_full_frame() -> bytes | None:
 _ambient_stop = threading.Event()
 
 
+# Reuse one connection and a cached IP so the ring fires the instant the bell is hit.
+_wled_session = requests.Session()
+_wled_addr: str | None = None   # cached IP for WLED_IP (resolved once)
+
+
+def _wled_host() -> str:
+    """Resolve the WLED mDNS hostname to an IP once and cache it.
+
+    `.local` (mDNS) lookups cost hundreds of ms each and were happening on *every*
+    ring — the main reason the LEDs lagged behind the on-screen flash. Resolve once,
+    reuse the IP. Falls back to the hostname (requests will resolve it) on failure.
+    """
+    global _wled_addr
+    if _wled_addr:
+        return _wled_addr
+    try:
+        _wled_addr = socket.gethostbyname(WLED_IP)
+    except OSError:
+        _wled_addr = WLED_IP
+    return _wled_addr
+
+
 def wled_post(payload):
-    """Send a state update to WLED."""
-    url = f"http://{WLED_IP}/json/state"
-    resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT,
-                         headers={"Content-Type": "application/json"})
-    resp.raise_for_status()
-    return resp
+    """Send a state update to WLED (cached IP + persistent session)."""
+    global _wled_addr
+    url = f"http://{_wled_host()}/json/state"
+    try:
+        resp = _wled_session.post(url, json=payload, timeout=REQUEST_TIMEOUT,
+                                  headers={"Content-Type": "application/json"})
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException:
+        _wled_addr = None   # IP may be stale (DHCP) — re-resolve on the next call
+        raise
 
 
 def ambient_loop():
-    """Play ambient animation on/off cycle until stopped."""
-    while not _ambient_stop.is_set():
-        try:
-            wled_post({"on": True, "ps": AMBIENT_PRESET_ID})
-        except requests.RequestException:
-            pass
+    """Run the ambient animation continuously until a ring interrupts it.
 
-        if _ambient_stop.wait(timeout=WLED_AMBIENT_DURATION):
-            break
-
-        try:
-            wled_post({"on": False})
-        except requests.RequestException:
-            pass
-
-        # Wait between cycles, but check stop flag
-        if _ambient_stop.wait(timeout=WLED_AMBIENT_INTERVAL):
-            break
-
-    # Make sure LEDs are off when ambient stops
+    WLED animates the effect itself on its controller, so we set the preset ONCE and just
+    wait — no on/off cycling (that read as sparse / cutting out). The slow, subtle look
+    lives in the preset itself (AMBIENT_PRESET_ID, editable in the WLED UI). A ring sets
+    _ambient_stop, releasing the wait so this thread exits and the ring takes over.
+    """
     try:
-        wled_post({"on": False})
-    except requests.RequestException:
-        pass
-    print(f"  Ambient mode stopped")
+        wled_post({"on": True, "ps": AMBIENT_PRESET_ID})
+        print(f"  WLED ambient preset {AMBIENT_PRESET_ID} running (continuous)")
+    except requests.RequestException as exc:
+        print(f"  WLED ambient failed: {exc}")
+    _ambient_stop.wait()   # block until a ring interrupts; WLED keeps animating meanwhile
 
 
 def trigger_wled_ring():
-    """Play ring animation, then start ambient loop."""
-    # Stop any running ambient loop
+    """Snap to the ring chase immediately, then fall back to the continuous ambient."""
+    # Interrupt ambient instantly so the ring takes over with no overlap.
     _ambient_stop.set()
 
     try:
-        wled_post({"on": True, "ps": RING_PRESET_ID})
+        # tt:0 → no fade-in transition; the ring chase snaps on the moment the bell is hit.
+        wled_post({"on": True, "ps": RING_PRESET_ID, "tt": 0})
         print(f"  WLED ring preset {RING_PRESET_ID} activated")
 
         time.sleep(WLED_RING_DURATION)
-
-        wled_post({"on": False})
-        print(f"  WLED off after {WLED_RING_DURATION}s")
+        # Don't turn the LEDs off — restart ambient below so they return to the idle
+        # animation (a gentle default-transition fade) rather than going dark.
     except requests.RequestException as exc:
         print(f"  WLED trigger failed: {exc}")
 
-    # Start ambient loop in background
+    # Resume the continuous ambient animation.
     _ambient_stop.clear()
     threading.Thread(target=ambient_loop, daemon=True).start()
 
@@ -344,6 +359,10 @@ def run_test_mode():
 
 
 def main():
+    # Start the continuous ambient animation at boot so the LEDs are always alive,
+    # not just after the first ring. A ring preempts it instantly, then it resumes.
+    threading.Thread(target=ambient_loop, daemon=True).start()
+
     if "--test" in sys.argv:
         run_test_mode()
     elif TRIGGER_MODE == "rf":

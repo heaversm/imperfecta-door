@@ -8,6 +8,12 @@ SRC=/Users/mheavers/Desktop/imperfecta/_project/prototype
 scp "$SRC/orchestrator.py" "$SRC/effects_server.py" "$SRC/palette.py" "$SRC/effects/effects.py" "$PI_HOST":~/
 ssh "$PI_HOST" "mkdir -p ~/static"
 scp "$SRC/static/viewer.html" "$PI_HOST":~/static/
-# Restart both services. bg_removal.service still has the old unit name; if
-# you rename the unit to effects.service later, change this line.
-ssh "$PI_HOST" "sudo systemctl restart bg_removal orchestrator && sudo systemctl status --no-pager bg_removal orchestrator | tail -25"
+# Restart both services. -t allocates a TTY so sudo can prompt for the password in your
+# terminal (a plain `ssh "host" "sudo ..."` has no TTY and fails with "a password is
+# required"). bg_removal.service still has the old unit name.
+ssh -t "$PI_HOST" "sudo systemctl restart bg_removal orchestrator"
+ssh "$PI_HOST" "systemctl is-active bg_removal orchestrator"
+
+# Reload the kiosk browser onto the new viewer.html WITHOUT a reboot: wait for the server
+# to come back + the viewer to reconnect its SSE, then broadcast a reload event.
+ssh "$PI_HOST" "for i in 1 2 3 4 5; do curl -sf http://127.0.0.1:5050/health >/dev/null && break; sleep 1; done; sleep 2; curl -s -X POST http://127.0.0.1:5050/reload >/dev/null && echo 'viewer reload sent'"

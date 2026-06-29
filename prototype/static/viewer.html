@@ -31,6 +31,21 @@
     transition: opacity 600ms ease-in-out;
   }
   #stage img.visible { opacity: 1; }
+  /* Ken Burns — a slow scale + drift on each still during its dwell. Pure CSS transform
+     on the already-rendered image (zero extra server render), composited by the Pi. A few
+     variants cycled per slide so it's not always the same move. transform-origin centers it. */
+  #stage img { transform-origin: center; }
+  @keyframes kb1 { from { transform: scale(1.00) translate(0,0);     } to { transform: scale(1.06) translate(-2%,-2%); } }
+  @keyframes kb2 { from { transform: scale(1.00) translate(0,0);     } to { transform: scale(1.06) translate( 2%, 2%); } }
+  @keyframes kb3 { from { transform: scale(1.05) translate( 1%,-1%); } to { transform: scale(1.00) translate( 0,  0);  } }
+  #stage img.kb1 { animation: kb1 5s ease-out forwards; }
+  #stage img.kb2 { animation: kb2 5s ease-out forwards; }
+  #stage img.kb3 { animation: kb3 5s ease-out forwards; }
+  /* Slitscan sweep — the slitscan smears along the vertical (time) axis, so a slow vertical
+     glide reads as the slit traveling through time. Pure CSS = perfectly smooth (no jerky
+     frame playback). Extra scale gives overscan so the translate never reveals an edge. */
+  @keyframes kbsweep { from { transform: scale(1.14) translateY(-7%); } to { transform: scale(1.14) translateY(7%); } }
+  #stage img.kbsweep { animation: kbsweep 5s ease-in-out forwards; }
   /* Optional status dot for debugging — hidden by default. */
   #status {
     position: fixed;
@@ -55,6 +70,28 @@
     100% { opacity: 0; }   /* slow fade over the remaining ~1.1s */
   }
   #flash.fire { animation: camflash 1200ms ease-out; }
+  /* Faster flash punctuating each effect-to-effect transition. */
+  @keyframes camflashfast {
+    0%   { opacity: 0; }
+    12%  { opacity: 0.9; }   /* quick snap (~50ms) */
+    100% { opacity: 0; }     /* fade over the rest (~350ms total) */
+  }
+  #flash.fire-fast { animation: camflashfast 400ms ease-out; }
+  /* Oblique Strategies prompt card — full-screen white with black text, shown as the
+     divider that caps each loop of the effects. Clean sans-serif, large and centered. */
+  #card {
+    position: fixed; inset: 0; z-index: 20;
+    background: #fff; color: #000;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 8vw;
+    font-family: "Helvetica Neue", "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(28px, 6vw, 60px);
+    line-height: 1.15; letter-spacing: -0.01em;
+    opacity: 0; pointer-events: none;
+    transition: opacity 600ms ease-in-out;
+  }
+  #card.visible { opacity: 1; }
 </style>
 </head>
 <body>
@@ -62,6 +99,7 @@
   <img id="a" alt="">
   <img id="b" alt="">
 </div>
+<div id="card"></div>
 <div id="status"></div>
 <div id="flash"></div>
 
@@ -70,30 +108,109 @@ const a = document.getElementById('a');
 const b = document.getElementById('b');
 const status = document.getElementById('status');
 const flash = document.getElementById('flash');
+const card = document.getElementById('card');
 let front = a, back = b;
 
 const SLIDE_MS = 4000;     // dwell per still
 const FADE_MS = 600;       // matches the CSS opacity transition
 const FLIP_FPS = 6;        // flipbook playback rate
 const FLIP_LOOPS = 1;      // ping-pong passes before advancing
+const CARD_MS = 5000;      // dwell on each prompt card (long enough to read)
+
+// Curated Oblique Strategies (Brian Eno & Peter Schmidt) — the universal, reaction-
+// provoking lines; studio-specific ones are dropped. Shown one per loop.
+const STRATEGIES = [
+  "Honor thy error as a hidden intention",
+  "Ask your body",
+  "Trust in the you of now",
+  "Breathe more deeply",
+  "Take a break",
+  "What would your closest friend do?",
+  "Emphasise the flaws",
+  "Be less critical more often",
+  "Look closely at the most embarrassing details and amplify them",
+  "Use an old idea",
+  "Reverse",
+  "Turn it upside down",
+  "Do something boring",
+  "Courage!",
+  "Disconnect from desire",
+  "Give way to your worst impulse",
+  "What are you really thinking about just now?",
+  "Listen to the quiet voice",
+  "Faced with a choice, do both",
+  "Repetition is a form of change",
+  "Discard an axiom",
+  "Remember those quiet evenings",
+  "Don't be afraid of things because they're easy to do",
+  "Accept advice",
+  "Is it finished?",
+  "Do nothing for as long as possible",
+  "Twist the spine",
+  "Decorate, decorate",
+  "Be dirty",
+  "Water",
+  "Ghost echoes",
+  "Simple subtraction",
+  "Tidy up",
+  "Make a blank valuable by putting it in an exquisite frame",
+  "Go slowly all the way round the outside",
+  "Look at a very small object; look at its centre",
+  "Abandon normal instructions",
+  "Change nothing and continue with immaculate consistency",
+  "Humanise something free of error",
+  "What wouldn't you do?",
+  "Use your own ideas",
+  "Don't break the silence",
+  "Take away the elements in order of apparent non-importance",
+  "State the problem as clearly as possible",
+  "Where is the edge?",
+  "Don't be frightened to display your talents",
+  "Distort time",
+  "Work at a different speed",
+  "Question the heroic",
+  "Look at the order in which you do things"
+];
+function randomStrategy() { return STRATEGIES[Math.floor(Math.random() * STRATEGIES.length)]; }
 
 let active = [];           // playlist currently looping: [{kind:'still',url} | {kind:'flipbook',frames}]
 let building = null;       // playlist being assembled from a new capture
+let handedOver = false;    // has the building playlist taken over the live loop yet?
 let idx = 0;
 let everConnected = false;
 
 function preload(urls) { urls.forEach(u => { const im = new Image(); im.src = u; }); }
 
-function doFlash() {
-  // Restart the CSS animation (remove → force reflow → re-add) so repeated triggers re-fire.
-  flash.classList.remove('fire');
+let kbIdx = 0;             // cycles the Ken Burns variant per still
+
+function doFlash(fast) {
+  // Restart the CSS animation (remove → force reflow → re-add) so repeated fires re-trigger.
+  // `fast` → the short punctuation between effects; default → the big trigger flash.
+  flash.classList.remove('fire', 'fire-fast');
   void flash.offsetWidth;
-  flash.classList.add('fire');
+  flash.classList.add(fast ? 'fire-fast' : 'fire');
 }
 
-function showStill(url) {
-  // Preload into the back layer, then crossfade.
+function showCard(text) {
+  // Full-screen white prompt card. The opaque card layer fades over the imagery;
+  // showStill/playFlipbook fade it back out when the next effect comes up.
+  card.textContent = text;
+  card.classList.add('visible');
+}
+
+const KB_CLASSES = ['kb1', 'kb2', 'kb3', 'kbsweep'];
+
+function showStill(url, kb = '') {
+  // Preload into the back layer, then crossfade. `kb` is the motion class to apply
+  // ('' = dead-still, used for the instant first photo; 'kbsweep' = slitscan vertical glide;
+  // otherwise a cycled Ken Burns variant). All motion is pure CSS transform → smooth.
   back.onload = () => {
+    card.classList.remove('visible');             // fade the prompt card out as the still fades in
+    back.classList.remove(...KB_CLASSES);
+    if (kb) {
+      void back.offsetWidth;                        // reflow so the animation restarts
+      back.classList.add(kb);
+    }
     back.classList.add('visible');
     front.classList.remove('visible');
     [front, back] = [back, front];   // swap roles for the next fade
@@ -104,6 +221,9 @@ function showStill(url) {
 
 async function playFlipbook(frames) {
   // Ping-pong through the raw burst frames on the front layer → they watch themselves move.
+  // Clear any Ken Burns transform so the motion clip plays clean (not scaled/drifting).
+  front.classList.remove(...KB_CLASSES);
+  card.classList.remove('visible');               // fade the prompt card out as the clip starts
   back.classList.remove('visible');
   const seq = frames.concat(frames.slice(1, -1).reverse());
   const order = [].concat(...Array(FLIP_LOOPS).fill(seq));
@@ -118,11 +238,18 @@ async function step() {
   if (!active.length) { setTimeout(step, 500); return; }   // nothing yet — wait for a ring
   const item = active[idx % active.length];
   idx++;
-  if (item.kind === 'flipbook' || item.kind === 'clip') {
+  doFlash(true);   // quick flash punctuating every effect-to-effect transition
+  if (item.kind === 'card') {
+    showCard(randomStrategy());
+    setTimeout(step, CARD_MS + FADE_MS);
+  } else if (item.kind === 'flipbook' || item.kind === 'clip') {
     await playFlipbook(item.frames);
     setTimeout(step, 200);
   } else {
-    showStill(item.url);
+    // Slitscan smears along the time axis → give it the smooth vertical sweep; everything
+    // else gets a cycled Ken Burns drift.
+    const kb = /slit/i.test(item.name || '') ? 'kbsweep' : ('kb' + (kbIdx++ % 3 + 1));
+    showStill(item.url, kb);
     setTimeout(step, SLIDE_MS + FADE_MS);
   }
 }
@@ -137,7 +264,7 @@ async function bootstrap() {
     if (!ok) break;
     items.push({ kind: 'still', url });
   }
-  if (items.length && !active.length) { active = items; idx = 0; }
+  if (items.length && !active.length) { items.push({ kind: 'card' }); active = items; idx = 0; }
 }
 
 function connect() {
@@ -148,10 +275,17 @@ function connect() {
     // CONNECTING (0): auto-reconnecting, leave it. CLOSED (2): gave up — reload to recover.
     if (es.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 3000);
   };
-  es.addEventListener('flash', doFlash);   // instant double-strobe on trigger
+  es.addEventListener('reload', () => location.reload());   // deploy.sh nudges new viewer.html live without a reboot
+  es.addEventListener('goto', (e) => { location.href = JSON.parse(e.data).url; });   // flip kiosk to /shader etc.
+  es.addEventListener('flash', () => doFlash(false));   // big flash the instant a trigger lands
+  es.addEventListener('first', (e) => {
+    // Instant static first photo — show it immediately, no motion, until the loop hands over.
+    showStill(JSON.parse(e.data).url, '');
+  });
   es.addEventListener('playlist-start', (e) => {
     const d = JSON.parse(e.data);
     building = [];   // start assembling a new playlist; keep looping the current one
+    handedOver = false;
     if (d.flipbook && d.flipbook.length) {
       preload(d.flipbook);
       building.push({ kind: 'flipbook', frames: d.flipbook });
@@ -165,9 +299,19 @@ function connect() {
       building.push({ kind: 'clip', frames: d.frames });
     } else {
       preload([d.url]);
-      building.push({ kind: 'still', url: d.url });
+      building.push({ kind: 'still', url: d.url, name: d.name });
     }
-    if (building.length >= 2) { active = building; idx = 0; }   // hand over — no black gap
+    // Hand over to the new playlist ONCE (the first time we have ≥2 items). After this,
+    // active and building are the same array, so later appends just extend the live loop —
+    // we must NOT reset idx again or the loop keeps snapping back to item 0 (the flipbook)
+    // every time another effect finishes rendering.
+    if (!handedOver && building.length >= 2) { active = building; idx = 0; handedOver = true; }
+  });
+  es.addEventListener('playlist-end', () => {
+    // Cap the loop with a prompt card → shows after all effects, then loops back to the top.
+    if (!building) return;
+    building.push({ kind: 'card' });
+    active = building;
   });
 }
 

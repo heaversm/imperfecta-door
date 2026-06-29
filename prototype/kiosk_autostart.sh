@@ -14,6 +14,11 @@
 #   --incognito                    → no profile cruft / "restore pages" bubble
 #   --allow-file-access-from-files → let the local loading page reach the server
 #   --check-for-update-interval huge → no update nags during an exhibit
+
+# Force the panel's native 1024x600. Its EDID reads null, so without this the Pi defaults
+# to 1024x768 and the 1024x600 panel mis-scales it (off-center / black bars on the glass).
+wlr-randr --output HDMI-A-1 --custom-mode 1024x600@60 2>/dev/null || true
+
 chromium \
   --kiosk \
   --password-store=basic \
