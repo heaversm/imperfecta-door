@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "facecapture",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-06-15",
+
+  // The container: a real Node runtime (Docker) that runs the @imgly background
+  // removal model + serves the tablet web app. Built from ./Dockerfile.
+  "containers": [
+    {
+      "class_name": "RemovalContainer",
+      "image": "./Dockerfile",
+      // Inference speed scales with vCPUs: standard-1 (1/2 vCPU) took ~9-15s
+      // per capture, standard-4 (4 vCPU, 12 GiB) targets a few seconds. Billed
+      // only while awake (sleeps after 30m idle).
+      "instance_type": "standard-4",
+      // One installation = one container is plenty and keeps the manifest writes
+      // serialized. Raise if you run many tablets hitting it hard.
+      "max_instances": 1
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "class_name": "RemovalContainer", "name": "REMOVAL" }]
+  },
+
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RemovalContainer"] }
+  ],
+
+  // Native R2 binding — the Worker owns all storage, no S3 credentials needed.
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "facecapture" }
+  ],
+
+  // R2_PUBLIC_URL is the public bucket URL (r2.dev or your custom domain),
+  // used to build the image URLs returned in the feed.
+  "vars": {
+    "R2_PUBLIC_URL": "https://pub-67a20696620845fe91648a2a3a904526.r2.dev"
+  },
+
+  "observability": { "enabled": true }
+}
