@@ -331,6 +331,10 @@
 						const msg = JSON.parse(e.data)
 						if (msg.type === 'feed' && Array.isArray(msg.heads)) {
 							applyFeed(msg.heads)
+						} else if (msg.type === 'ring') {
+							// Real doorbell rang — same path as the on-screen button.
+							// Dormant in the tablet demo (no ring messages arrive there).
+							capture()
 						}
 					} catch (err) {
 						console.error('ws message', err)
