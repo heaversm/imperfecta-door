@@ -60,6 +60,9 @@ app.post("/remove", async (c) => {
 
 // ---------------- standalone mode: storage + API + live feed ----------------
 let broadcast = () => {};
+// Doorbell "ring" push over the same /ws the feed uses. Assigned in the wss block
+// below (standalone mode only); a no-op until then so a stray call can't throw.
+let broadcastRing = () => {};
 
 if (STORAGE_DIR) {
   const manifestPath = join(STORAGE_DIR, "manifest.json");
@@ -87,6 +90,14 @@ if (STORAGE_DIR) {
   app.get("/api/heads", async (c) => {
     const manifest = await readManifest();
     return c.json(manifest.slice().reverse());
+  });
+
+  // Doorbell trigger: the Pi orchestrator POSTs this on an RF burst. It just
+  // fans a "ring" out to every connected page over the existing /ws — the page
+  // runs the same capture() the on-screen button does. No body needed.
+  app.post("/api/ring", (c) => {
+    broadcastRing();
+    return c.json({ ok: true });
   });
 
   app.post("/api/capture", async (c) => {
@@ -230,6 +241,12 @@ if (STORAGE_DIR) {
       type: "feed",
       heads: manifest.slice().reverse(),
     });
+    for (const client of wss.clients) {
+      if (client.readyState === 1) client.send(msg);
+    }
+  };
+  broadcastRing = () => {
+    const msg = JSON.stringify({ type: "ring" });
     for (const client of wss.clients) {
       if (client.readyState === 1) client.send(msg);
     }
