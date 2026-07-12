@@ -14,10 +14,15 @@
 // the live viewer the moment the server responds, eliminating the cold-boot race
 // (no fixed wait, no connection-refused page). no-cors fetch resolves when the
 // server is listening and rejects (retry) while it's still coming up.
-const TARGET = 'http://localhost:5050/';
+// Mode is passed by kiosk_autostart.sh as ?mode=effects|melt (default effects).
+// 'melt' points at the facecapture app (:8090); 'effects' at the viewer (:5050).
+const MODE = new URLSearchParams(location.search).get('mode') || 'effects';
+const CFG = MODE === 'melt'
+  ? { health: 'http://localhost:8090/api/health', target: 'http://localhost:8090/' }
+  : { health: 'http://localhost:5050/health',     target: 'http://localhost:5050/' };
 function check() {
-  fetch('http://localhost:5050/health', { mode: 'no-cors', cache: 'no-store' })
-    .then(() => { window.location.replace(TARGET); })
+  fetch(CFG.health, { mode: 'no-cors', cache: 'no-store' })
+    .then(() => { window.location.replace(CFG.target); })
     .catch(() => { setTimeout(check, 1000); });
 }
 check();
