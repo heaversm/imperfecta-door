@@ -63,7 +63,8 @@ def read_display_mode() -> str:
             mode = f.read().strip()
             if mode in ("effects", "melt"):
                 return mode
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # missing file, unreadable, or non-UTF-8 contents → fall back safely
         pass
     return os.environ.get("DISPLAY_MODE", "effects")
 
