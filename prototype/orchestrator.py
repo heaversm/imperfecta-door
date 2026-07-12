@@ -49,8 +49,23 @@ WLED_IP    = os.environ.get("WLED_HOST",    "wled-dig-quad-v3.local")
 
 MAIXCAM_PORT = 8080
 
-BG_SERVER_IP = "127.0.0.1"     # bg_removal_server.py runs locally on Pi
+BG_SERVER_IP = "127.0.0.1"     # effects/bg server runs locally on Pi
 BG_SERVER_PORT = 5050
+FACECAPTURE_PORT = 8090        # facecapture standalone server (melt gallery mode)
+
+def read_display_mode() -> str:
+    """Which display experience is live: 'effects' (viewer.html slideshow, default)
+    or 'melt' (facecapture app). Read from ~/display_mode so the mode can be flipped
+    without editing code; falls back to the DISPLAY_MODE env var, then 'effects'.
+    Read per-trigger (cheap) so a mode change takes effect on the next ring."""
+    try:
+        with open(os.path.expanduser("~/display_mode")) as f:
+            mode = f.read().strip()
+            if mode in ("effects", "melt"):
+                return mode
+    except OSError:
+        pass
+    return os.environ.get("DISPLAY_MODE", "effects")
 
 RING_PRESET_ID = 1              # WLED preset for ring animation
 AMBIENT_PRESET_ID = 2           # WLED preset for night ambient (future use)
@@ -205,21 +220,21 @@ def handle_button_press():
     wled_thread = threading.Thread(target=trigger_wled_ring, daemon=True)
     wled_thread.start()
 
-    # Kick the local effects server
+    # Kick whichever display is live. 'melt' -> ring the facecapture app; 'effects'
+    # -> the existing render pipeline. WLED fires the same either way (above).
+    mode = read_display_mode()
+    if mode == "melt":
+        url = f"http://{BG_SERVER_IP}:{FACECAPTURE_PORT}/api/ring"
+    else:
+        url = f"http://{BG_SERVER_IP}:{BG_SERVER_PORT}/trigger"
     try:
-        resp = requests.post(
-            f"http://{BG_SERVER_IP}:{BG_SERVER_PORT}/trigger",
-            timeout=15.0,
-        )
+        resp = requests.post(url, timeout=15.0)
         if resp.ok:
-            data = resp.json()
-            print(f"  effects: {data.get('effect')} "
-                  f"({data.get('effect_ms', 0):.0f}ms render, "
-                  f"{data.get('total_ms', 0):.0f}ms total)")
+            print(f"  [{mode}] trigger ok")
         else:
-            print(f"  effects HTTP {resp.status_code}: {resp.text[:200]}")
+            print(f"  [{mode}] trigger HTTP {resp.status_code}: {resp.text[:200]}")
     except requests.RequestException as exc:
-        print(f"  effects trigger failed: {exc}")
+        print(f"  [{mode}] trigger failed: {exc}")
 
     wled_thread.join(timeout=10.0)
     print("  Done")
