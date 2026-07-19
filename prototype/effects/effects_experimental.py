@@ -50,3 +50,24 @@ def thermal_map(frames: list[Image.Image], spatial: float = 0.35,
     idx = np.clip((1.0 - spatial) * gray + spatial * diag, 0, 255)
     stops = [(12, 40, 55), (200, 30, 45), (240, 120, 30), (240, 220, 60), (70, 180, 95)]
     return _gradient_map(idx, stops)
+
+
+@_timed
+def mirror_smear(frames: list[Image.Image], split: float = 0.5,
+                 smear_px: int = 70, seed: int | None = None) -> Image.Image:
+    """Mirrored-world composite (ref 5.30): top = image, bottom = a vertically flipped
+    copy; the seam row is broadcast across a band so the join reads as vertically
+    stretched 'edge pixels'. B&W family."""
+    src = _bw_treatment(_middle_frame(frames), seed=seed)
+    arr = np.asarray(src)
+    h, w, _ = arr.shape
+    split_y = int(np.clip(split, 0.1, 0.9) * h)
+    flipped = arr[::-1]
+    out = np.vstack([arr[:split_y], flipped[:h - split_y]])   # exactly h rows
+    band = min(max(2, smear_px), h)
+    seam_i = min(split_y, h - 1)
+    seam = out[seam_i:seam_i + 1]                             # (1, w, 3)
+    y0 = max(0, split_y - band // 2)
+    y1 = min(h, y0 + band)
+    out[y0:y1] = np.repeat(seam, y1 - y0, axis=0)
+    return Image.fromarray(out)
