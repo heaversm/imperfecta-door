@@ -35,6 +35,22 @@ def _gradient_map(gray_arr: np.ndarray, stops: list[tuple[int, int, int]]) -> Im
     return Image.fromarray(out.astype(np.uint8))
 
 
+def _scaled_shifted(img: Image.Image, scale: float, ox: int, oy: int) -> np.ndarray:
+    """Return an (H, W, 3) array of `img` scaled about its center and shifted by (ox, oy).
+
+    The scaled copy is composited over an untouched full-size copy of the same image,
+    so downscaling (< 1.0) never leaves black borders — the original shows behind it.
+    Upscaling (> 1.0) crops to the frame. Used to give each interlace slice its own
+    random zoom/offset so copies deliberately misalign.
+    """
+    w, h = img.size
+    sw, sh = max(1, round(w * scale)), max(1, round(h * scale))
+    resized = img.resize((sw, sh), Image.LANCZOS)
+    canvas = img.copy()                                       # base avoids black gaps
+    canvas.paste(resized, ((w - sw) // 2 + ox, (h - sh) // 2 + oy))
+    return np.asarray(canvas.convert("RGB"))
+
+
 @_timed
 def thermal_map(frames: list[Image.Image], spatial: float = 0.35,
                 seed: int | None = None) -> Image.Image:
@@ -74,64 +90,76 @@ def mirror_smear(frames: list[Image.Image], offset_frac: float = 0.33,
 
 @_timed
 def strip_interlace(frames: list[Image.Image], n_strips: int = 14,
+                    scale_jitter: float = 0.15, shift_px: int = 45,
                     seed: int | None = None) -> Image.Image:
-    """Interlace vertical strips of a B&W capture with a color capture from a different
-    point in the burst (ref 5.33). Strip widths are randomly scaled 85%-115% of the base
-    width so the columns are uneven. Light grain so the B&W reads as film, not static."""
+    """Interlace vertical strips of a B&W base with a color capture (ref 5.33). Each color
+    strip samples from a copy of the color frame that is randomly scaled (±`scale_jitter`)
+    and shifted (±`shift_px`), so every strip's content misaligns with its neighbours —
+    the fractured interlace. B&W base stays upright; light grain."""
     rng = random.Random(seed)
     n = len(frames)
-    color = np.asarray(frames[n // 2].convert("RGB"))
+    color_img = frames[n // 2].convert("RGB")
     bw = np.asarray(_bw_treatment(frames[n // 4] if n >= 4 else frames[0],
                                   grain=0.03, seed=seed))
-    h, w, _ = color.shape
+    h, w, _ = bw.shape
     out = bw.copy()
-    base = w / n_strips
-    x, i = 0, 0
-    while x < w:
-        sw = max(4, int(base * rng.uniform(0.85, 1.15)))
-        x1 = min(w, x + sw)
-        if i % 2 == 1:                            # odd strips -> color; even stay B&W
-            out[:, x:x1] = color[:, x:x1]
-        x, i = x1, i + 1
+    strip_w = max(1, w // n_strips)
+    for i in range(n_strips):
+        if i % 2 == 0:                            # even strips stay B&W (the base)
+            continue
+        x0 = i * strip_w
+        if x0 >= w:
+            break
+        x1 = w if i == n_strips - 1 else min(w, (i + 1) * strip_w)
+        s = 1.0 + rng.uniform(-scale_jitter, scale_jitter)
+        layer = _scaled_shifted(color_img, s, rng.randint(-shift_px, shift_px),
+                                rng.randint(-shift_px, shift_px))
+        out[:, x0:x1] = layer[:, x0:x1]
     return Image.fromarray(out)
 
 
 @_timed
-def diagonal_interlace(frames: list[Image.Image], n_sectors: int = 9,
-                       stroke_px: int = 4, seed: int | None = None) -> Image.Image:
-    """Radiating diagonal wedges (ref 5.37): 8-10 angular sectors around an off-center
-    point, alternating B&W and color, with randomly uneven wedge widths ('random
-    scaling') and a white stroke on every wedge boundary. Light grain on the B&W."""
+def diagonal_interlace(frames: list[Image.Image], n_cuts: int = 4, stroke_px: int = 4,
+                       scale_jitter: float = 0.15, shift_px: int = 55,
+                       seed: int | None = None) -> Image.Image:
+    """Random diagonal shards (ref 5.37): `n_cuts` straight diagonal lines at random
+    angles/positions carve the frame into triangular/polygonal regions. Each region is
+    filled from one of several candidate copies of the image — a mix of B&W and color,
+    each randomly scaled (±`scale_jitter`) and shifted — so shards misalign. A white
+    stroke is drawn along every cut line. Light grain on the B&W."""
     rng = random.Random(seed)
     src = _middle_frame(frames)
-    color = np.asarray(src.convert("RGB"))
-    bw = np.asarray(_bw_treatment(src, grain=0.03, seed=seed))
-    h, w, _ = color.shape
-    cx, cy = w * 0.5, h * 0.62                               # fan origin, lower-center
+    color_img = src.convert("RGB")
+    bw_img = _bw_treatment(src, grain=0.03, seed=seed)
+    w, h = color_img.size
     ys, xs = np.indices((h, w), dtype=np.float32)
-    ang = np.arctan2(ys - cy, xs - cx)                      # -pi..pi
-    r = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
 
-    n_sectors = max(3, n_sectors)
-    widths = np.array([rng.uniform(0.85, 1.15) for _ in range(n_sectors)], dtype=np.float64)
-    widths = widths / widths.sum() * (2 * np.pi)
-    bounds = (np.cumsum(widths) - np.pi)                    # sector upper boundaries
+    # Random diagonal cut lines in normal form: xs*c + ys*s - off, sign = which side.
+    lines = []
+    for _ in range(max(1, n_cuts)):
+        th = rng.uniform(0.0, np.pi)
+        px, py = rng.uniform(0.2, 0.8) * w, rng.uniform(0.2, 0.8) * h
+        c, s = float(np.cos(th)), float(np.sin(th))
+        lines.append((c, s, px * c + py * s))
 
-    sector = np.zeros((h, w), dtype=np.int32)
-    prev = -np.pi
-    for i, b in enumerate(bounds):
-        sector[(ang >= prev) & (ang < b)] = i
-        prev = b
-    sector[ang >= bounds[-1]] = n_sectors - 1
+    label = np.zeros((h, w), dtype=np.int32)                # region id = side-bits of each line
+    for k, (c, s, off) in enumerate(lines):
+        label += ((xs * c + ys * s - off) > 0).astype(np.int32) << k
 
-    use_color = (sector % 2 == 0)
-    out = np.where(use_color[..., None], color, bw).astype(np.uint8)
+    # Candidate copies: mix of B&W and color, each with its own random zoom/shift.
+    layers = []
+    for _ in range(6):
+        base = color_img if rng.random() < 0.5 else bw_img
+        sc = 1.0 + rng.uniform(-scale_jitter, scale_jitter)
+        layers.append(_scaled_shifted(base, sc, rng.randint(-shift_px, shift_px),
+                                      rng.randint(-shift_px, shift_px)))
 
-    stroke = np.zeros((h, w), dtype=bool)                   # white stroke on each boundary
-    for b in bounds:
-        da = np.abs(((ang - b + np.pi) % (2 * np.pi)) - np.pi)   # angular dist to boundary
-        stroke |= (da * r < stroke_px)
-    out[stroke] = 255
+    out = np.asarray(bw_img).copy()
+    for val in np.unique(label):                            # assign a random copy per shard
+        out[label == val] = layers[rng.randrange(len(layers))][label == val]
+
+    for c, s, off in lines:                                 # white stroke along each cut
+        out[np.abs(xs * c + ys * s - off) < stroke_px] = 255
     return Image.fromarray(out)
 
 
