@@ -28,6 +28,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import effects   # noqa: E402  (path set above)
 import palette    # noqa: E402  (the shared roster — same effects the gallery loop uses)
+import experimental_palette   # noqa: E402  (preview-only experimental roster; not deployed)
 
 # ─── Config ────────────────────────────────────────────────────────────────
 BURST_FRAMES = 30        # how many frames per capture
@@ -100,6 +101,8 @@ def run_all_effects(frames: list[Image.Image]) -> list[dict]:
         timed(name, fn, frames)
     for name, fn in palette.ANIM_PALETTE:
         timed(name, fn, middle, 0)   # living effects: preview the middle frame as a still
+    for name, fn in experimental_palette.EXPERIMENTAL_PALETTE:
+        timed(name, fn, frames)      # experimental (preview-only) effects
     return results
 
 

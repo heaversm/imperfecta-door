@@ -9,13 +9,12 @@ tracemalloc undercounts numpy's C allocations. The real perf gate is running thi
 at PR review. A memory-thrashing effect also shows up as slow, so the time check is the
 effective guardrail.
 """
+import importlib
 import sys
 import time
 import tracemalloc
 
 from PIL import Image
-
-import effects
 
 WORK = (1024, 576)
 N = 30
@@ -30,13 +29,15 @@ def make_burst():
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: python3 validate_effect.py <effect_name>")
+    if len(sys.argv) not in (2, 3):
+        print("usage: python3 validate_effect.py <effect_name> [module]  (default module: effects)")
         sys.exit(2)
     name = sys.argv[1]
-    fn = getattr(effects, name, None)
+    module_name = sys.argv[2] if len(sys.argv) == 3 else "effects"
+    mod = importlib.import_module(module_name)
+    fn = getattr(mod, name, None)
     if not callable(fn):
-        print(f"FAIL: effects.{name} not found / not callable")
+        print(f"FAIL: {module_name}.{name} not found / not callable")
         sys.exit(1)
 
     frames = make_burst()
