@@ -192,24 +192,8 @@ VIEWER_HTML = r"""<!doctype html>
   }
   .tile img {
     width: 100%; display: block; aspect-ratio: 16/9; object-fit: cover;
-    background: #000; transform-origin: center;
+    background: #000;
   }
-  /* Motion preview — mirrors viewer.html's per-effect CSS motion, but looped
-     (infinite alternate) so you can watch each effect move in the grid. */
-  @keyframes kb1 { from { transform: scale(1.00) translate(0,0); } to { transform: scale(1.06) translate(-2%,-2%); } }
-  @keyframes kb2 { from { transform: scale(1.00) translate(0,0); } to { transform: scale(1.06) translate( 2%, 2%); } }
-  @keyframes kb3 { from { transform: scale(1.05) translate( 1%,-1%); } to { transform: scale(1.00) translate(0,0); } }
-  @keyframes kbsweep  { from { transform: scale(1.14) translateY(-7%); } to { transform: scale(1.14) translateY(7%); } }
-  @keyframes kbsweepx { from { transform: scale(1.14) translateX(-7%); } to { transform: scale(1.14) translateX(7%); } }
-  @keyframes kbrot    { from { transform: scale(1.18) rotate(-2.2deg); } to { transform: scale(1.18) rotate(2.2deg); } }
-  @keyframes kbhue    { from { transform: scale(1.03); filter: hue-rotate(-25deg); } to { transform: scale(1.07); filter: hue-rotate(35deg); } }
-  .tile img.kb1     { animation: kb1     5s ease-in-out infinite alternate; }
-  .tile img.kb2     { animation: kb2     5s ease-in-out infinite alternate; }
-  .tile img.kb3     { animation: kb3     5s ease-in-out infinite alternate; }
-  .tile img.kbsweep { animation: kbsweep 5s ease-in-out infinite alternate; }
-  .tile img.kbsweepx{ animation: kbsweepx 5s ease-in-out infinite alternate; }
-  .tile img.kbrot   { animation: kbrot   6s ease-in-out infinite alternate; }
-  .tile img.kbhue   { animation: kbhue   6s ease-in-out infinite alternate; }
   .tile .meta {
     padding: 8px 12px;
     display: flex; justify-content: space-between;
@@ -278,24 +262,12 @@ function render(data) {
   }
 }
 
-// Mirror viewer.html's motionFor(): map effect name -> motion class.
-let kbIdx = 0;
-function motionFor(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('thermal')) return 'kbhue';
-  if (n.includes('slit') || n.includes('mirror')) return 'kbsweep';
-  if (n.includes('strip') || n.includes('slice stretch')) return 'kbsweepx';
-  if (n.includes('diagonal')) return 'kbrot';
-  return 'kb' + (kbIdx++ % 3 + 1);
-}
-
 function makeTile(r, isSource) {
   const tile = document.createElement('div');
   tile.className = 'tile' + (isSource ? ' source-tile' : '');
   const img = document.createElement('img');
   img.src = r.url;
   img.loading = 'lazy';
-  if (!isSource) img.classList.add(motionFor(r.name));   // apply this effect's motion
   img.addEventListener('click', () => {
     lbImg.src = r.url;
     lb.classList.add('open');
