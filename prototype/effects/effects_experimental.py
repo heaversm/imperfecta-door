@@ -53,65 +53,86 @@ def thermal_map(frames: list[Image.Image], spatial: float = 0.35,
 
 
 @_timed
-def mirror_smear(frames: list[Image.Image], split: float = 0.5,
-                 smear_px: int = 70, seed: int | None = None) -> Image.Image:
-    """Mirrored-world composite (ref 5.30): top = image, bottom = a vertically flipped
-    copy; the seam row is broadcast across a band so the join reads as vertically
-    stretched 'edge pixels'. B&W family."""
-    src = _bw_treatment(_middle_frame(frames), seed=seed)
+def mirror_smear(frames: list[Image.Image], offset_frac: float = 0.33,
+                 smear_px: int = 60, seed: int | None = None) -> Image.Image:
+    """Offset mirror (ref 5.30): an upside-down copy of the whole scene fills the top,
+    shifted down by `offset_frac` of the height so the bottom band keeps the original
+    upright. The top and bottom EDGES are broadcast across a band so both read as
+    vertically stretched 'smears'. B&W family, light grain."""
+    src = _bw_treatment(_middle_frame(frames), grain=0.03, seed=seed)
     arr = np.asarray(src)
     h, w, _ = arr.shape
-    split_y = int(np.clip(split, 0.1, 0.9) * h)
-    flipped = arr[::-1]
-    out = np.vstack([arr[:split_y], flipped[:h - split_y]])   # exactly h rows
-    band = min(max(2, smear_px), h)
-    seam_i = min(split_y, h - 1)
-    seam = out[seam_i:seam_i + 1]                             # (1, w, 3)
-    y0 = max(0, split_y - band // 2)
-    y1 = min(h, y0 + band)
-    out[y0:y1] = np.repeat(seam, y1 - y0, axis=0)
+    off = max(1, int(np.clip(offset_frac, 0.1, 0.49) * h))
+    flipped = arr[::-1]                           # whole image, upside down
+    out = arr.copy()                              # original in the bottom band
+    out[:h - off] = flipped[off:]                 # top (h-off) = upside-down whole scene, offset down
+    band = min(max(2, smear_px), off)
+    out[:band] = np.repeat(out[band:band + 1], band, axis=0)                 # smear top edge
+    out[h - band:] = np.repeat(out[h - band - 1:h - band], band, axis=0)     # smear bottom edge
     return Image.fromarray(out)
 
 
 @_timed
 def strip_interlace(frames: list[Image.Image], n_strips: int = 14,
                     seed: int | None = None) -> Image.Image:
-    """Interlace vertical strips of a B&W capture with a color capture taken from a
-    different point in the burst (ref 5.33). Even strips stay B&W (the base); odd strips
-    are replaced with the color frame, so the two captures interleave."""
+    """Interlace vertical strips of a B&W capture with a color capture from a different
+    point in the burst (ref 5.33). Strip widths are randomly scaled 85%-115% of the base
+    width so the columns are uneven. Light grain so the B&W reads as film, not static."""
+    rng = random.Random(seed)
     n = len(frames)
     color = np.asarray(frames[n // 2].convert("RGB"))
-    bw = np.asarray(_bw_treatment(frames[n // 4] if n >= 4 else frames[0], seed=seed))
+    bw = np.asarray(_bw_treatment(frames[n // 4] if n >= 4 else frames[0],
+                                  grain=0.03, seed=seed))
     h, w, _ = color.shape
     out = bw.copy()
-    strip_w = max(1, w // n_strips)
-    for i in range(n_strips):
-        if i % 2 == 0:
-            continue
-        x0 = i * strip_w
-        if x0 >= w:
-            break
-        x1 = w if i == n_strips - 1 else min(w, (i + 1) * strip_w)
-        out[:, x0:x1] = color[:, x0:x1]
+    base = w / n_strips
+    x, i = 0, 0
+    while x < w:
+        sw = max(4, int(base * rng.uniform(0.85, 1.15)))
+        x1 = min(w, x + sw)
+        if i % 2 == 1:                            # odd strips -> color; even stay B&W
+            out[:, x:x1] = color[:, x:x1]
+        x, i = x1, i + 1
     return Image.fromarray(out)
 
 
 @_timed
-def diagonal_interlace(frames: list[Image.Image], offset_frac: float = 0.06,
-                       seed: int | None = None) -> Image.Image:
-    """Diagonal bisect (ref 5.37): lower-left triangle = B&W, upper-right triangle = a
-    horizontally offset color copy, so the mono and color halves interlace at the
-    diagonal seam."""
+def diagonal_interlace(frames: list[Image.Image], n_sectors: int = 9,
+                       stroke_px: int = 4, seed: int | None = None) -> Image.Image:
+    """Radiating diagonal wedges (ref 5.37): 8-10 angular sectors around an off-center
+    point, alternating B&W and color, with randomly uneven wedge widths ('random
+    scaling') and a white stroke on every wedge boundary. Light grain on the B&W."""
+    rng = random.Random(seed)
     src = _middle_frame(frames)
     color = np.asarray(src.convert("RGB"))
-    bw = np.asarray(_bw_treatment(src, seed=seed))
+    bw = np.asarray(_bw_treatment(src, grain=0.03, seed=seed))
     h, w, _ = color.shape
+    cx, cy = w * 0.5, h * 0.62                               # fan origin, lower-center
     ys, xs = np.indices((h, w), dtype=np.float32)
-    mask = (xs / w + ys / h) > 1.0                          # upper-right triangle
-    dx = int(w * offset_frac)
-    color_shift = np.roll(color, dx, axis=1)
-    out = np.where(mask[..., None], color_shift, bw)
-    return Image.fromarray(out.astype(np.uint8))
+    ang = np.arctan2(ys - cy, xs - cx)                      # -pi..pi
+    r = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+
+    n_sectors = max(3, n_sectors)
+    widths = np.array([rng.uniform(0.85, 1.15) for _ in range(n_sectors)], dtype=np.float64)
+    widths = widths / widths.sum() * (2 * np.pi)
+    bounds = (np.cumsum(widths) - np.pi)                    # sector upper boundaries
+
+    sector = np.zeros((h, w), dtype=np.int32)
+    prev = -np.pi
+    for i, b in enumerate(bounds):
+        sector[(ang >= prev) & (ang < b)] = i
+        prev = b
+    sector[ang >= bounds[-1]] = n_sectors - 1
+
+    use_color = (sector % 2 == 0)
+    out = np.where(use_color[..., None], color, bw).astype(np.uint8)
+
+    stroke = np.zeros((h, w), dtype=bool)                   # white stroke on each boundary
+    for b in bounds:
+        da = np.abs(((ang - b + np.pi) % (2 * np.pi)) - np.pi)   # angular dist to boundary
+        stroke |= (da * r < stroke_px)
+    out[stroke] = 255
+    return Image.fromarray(out)
 
 
 @_timed
