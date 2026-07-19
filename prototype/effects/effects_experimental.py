@@ -112,3 +112,26 @@ def diagonal_interlace(frames: list[Image.Image], offset_frac: float = 0.06,
     color_shift = np.roll(color, dx, axis=1)
     out = np.where(mask[..., None], color_shift, bw)
     return Image.fromarray(out.astype(np.uint8))
+
+
+@_timed
+def block_mosaic(frames: list[Image.Image], block: int = 40, coverage: float = 0.55,
+                 seed: int | None = None) -> Image.Image:
+    """Coarse block mosaic over the upper-left region with a stepped (staircase) diagonal
+    edge (ref 5.34); source color preserved outside the region. `block` is the mosaic
+    cell size in px; `coverage` sets how far the staircase extends toward lower-right."""
+    src = _middle_frame(frames)
+    arr = np.asarray(src.convert("RGB")).copy()
+    h, w, _ = arr.shape
+    nby, nbx = h // block, w // block
+    if nby == 0 or nbx == 0:
+        return Image.fromarray(arr)
+    trimmed = arr[:nby * block, :nbx * block].astype(np.float32)
+    pooled = trimmed.reshape(nby, block, nbx, block, 3).mean(axis=(1, 3)).astype(np.uint8)
+    thresh = (nby + nbx) * coverage
+    for by in range(nby):
+        for bx in range(nbx):
+            if by + bx < thresh:                            # upper-left staircase region
+                y0, x0 = by * block, bx * block
+                arr[y0:y0 + block, x0:x0 + block] = pooled[by, bx]
+    return Image.fromarray(arr)
