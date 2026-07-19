@@ -37,20 +37,10 @@ CAMERA_INDEX = 0         # 0 = default Mac webcam
 CAPTURE_WIDTH = 1280     # request from camera (camera picks closest supported)
 CAPTURE_HEIGHT = 720
 PORT = 8000
-
-# Clip prototypes — render a few cheap effects across the burst so the SUBJECT MOVES
-# (real temporal animation, not a pan on a still). Preview-only; lets us compare a
-# stop-motion vs a smoother playback before committing on the Pi. Each is a pure
-# frames->Image effect rendered on one burst frame at a time with a fixed seed, so the
-# random structure stays put and only the subject animates.
-CLIP_EFFECTS = [
-    ("thermal map",  effects.thermal_map),
-    ("block mosaic", effects.block_mosaic),
-    ("mirror smear", effects.mirror_smear),
-]
-CLIP_FRAMES = 16         # frames rendered across the burst per clip effect
-CLIP_SEED = 7            # fixed per-clip seed → stable structure, moving subject
 # ───────────────────────────────────────────────────────────────────────────
+# Clip effects (the moving ones) come from palette.ANIM_PALETTE — same roster the gallery
+# renders — so the preview matches production. Rendered here across ANIM_FRAMES burst
+# frames and played back 6fps ping-pong in the browser, mirroring the viewer's playFlipbook.
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -112,10 +102,9 @@ def run_all_effects(frames: list[Image.Image]) -> list[dict]:
 
     for name, fn in palette.STILL_PALETTE:
         timed(name, fn, frames)
-    for name, fn in palette.ANIM_PALETTE:
-        timed(name, fn, middle, 0)   # living effects: preview the middle frame as a still
     for name, fn in experimental_palette.EXPERIMENTAL_PALETTE:
         timed(name, fn, frames)      # experimental (preview-only) effects
+    # ANIM_PALETTE (moving) effects are previewed as clips in /capture, not as stills here.
     return results
 
 
@@ -150,22 +139,24 @@ def capture():
             "ms": round(r["ms"], 1),
         })
 
-    # Render clip prototypes: each effect across CLIP_FRAMES evenly-sampled burst frames.
+    # Render the ANIM_PALETTE clips: each effect across ANIM_FRAMES evenly-sampled burst
+    # frames (fixed per-clip seed 1000+k, matching effects_server), so the subject moves.
     clips = []
     n = len(frames)
+    nf = palette.ANIM_FRAMES
     if n >= 2:
-        sample = [round(i * (n - 1) / (CLIP_FRAMES - 1)) for i in range(CLIP_FRAMES)]
-        for name, fn in CLIP_EFFECTS:
+        sample = [round(i * (n - 1) / (nf - 1)) for i in range(nf)]
+        for k, (name, fn) in enumerate(palette.ANIM_PALETTE):
             urls = []
             for j, fi in enumerate(sample):
-                res = fn([frames[fi]], seed=CLIP_SEED)
-                img = res[0] if isinstance(res, tuple) else res   # @_timed -> (img, ms)
+                res = fn([frames[fi]], 1000 + k, j)
+                img = res[0] if isinstance(res, tuple) else res
                 if img.mode != "RGB":
                     img = img.convert("RGB")
                 fname = f"clip_{name.replace(' ', '_')}_{j:02d}.jpg"
                 img.save(session_dir / fname, quality=85)
                 urls.append(f"/output/{timestamp}/{fname}")
-            clips.append({"name": name, "frames": urls})
+            clips.append({"name": name, "frames": urls, "fps": 6})
 
     return jsonify({
         "session": timestamp,
@@ -294,12 +285,10 @@ function render(data) {
   for (const r of data.results) {
     grid.appendChild(makeTile(r, false));
   }
-  // Clip prototypes: two tiles per effect — stop-motion (every other frame, slow) vs
-  // smooth (all frames, faster) — so the subject actually moves. Compare the two looks.
+  // Clip tiles: one per ANIM effect — the effect rendered across the burst so the subject
+  // moves, played 6fps ping-pong (same as the gallery viewer's playFlipbook).
   for (const c of (data.clips || [])) {
-    const stop = c.frames.filter((_, k) => k % 2 === 0);   // half the frames
-    grid.appendChild(makeClipTile(c.name + ' — stop-motion', stop, 6));
-    grid.appendChild(makeClipTile(c.name + ' — smooth', c.frames, 12));
+    grid.appendChild(makeClipTile(c.name + ' (clip)', c.frames, c.fps || 6));
   }
 }
 
@@ -307,10 +296,11 @@ function makeClipTile(label, frames, fps) {
   const tile = document.createElement('div');
   tile.className = 'tile';
   const img = document.createElement('img');
-  img.src = frames[0];
-  frames.forEach(u => { const p = new Image(); p.src = u; });   // preload for smooth playback
+  const seq = frames.concat(frames.slice(1, -1).reverse());   // ping-pong (no jump-cut)
+  seq.forEach(u => { const p = new Image(); p.src = u; });     // preload for smooth playback
+  img.src = seq[0];
   let i = 0;
-  clipTimers.push(setInterval(() => { i = (i + 1) % frames.length; img.src = frames[i]; }, 1000 / fps));
+  clipTimers.push(setInterval(() => { i = (i + 1) % seq.length; img.src = seq[i]; }, 1000 / fps));
   img.addEventListener('click', () => { lbImg.src = img.src; lb.classList.add('open'); });
   const meta = document.createElement('div');
   meta.className = 'meta';

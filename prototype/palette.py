@@ -27,23 +27,27 @@ def _slice(frames):  return effects.slice_displacement(frames)[0]      # still (
 def _mond(frames):   return effects.mondrian(frames)[0]                # color (still — gets Ken Burns)
 def _dither(frames): return effects.dither(frames, fg=(255, 255, 255), bg=(0, 0, 0))[0]  # B/W stipple (still)
 
-# Reference-batch effects (2026-07-18): thermal/interlace/mosaic/smear family.
-def _thermal(frames):  return effects.thermal_map(frames)[0]           # color spectral map
-def _mirror(frames):   return effects.mirror_smear(frames)[0]          # B&W offset mirror
+# Reference-batch STILLS (2026-07-18): interlace / smear family. These stay stills —
+# strip & diagonal interlace are too heavy to render per-frame on the Pi; slice stretch
+# reads fine as a still.
 def _stripint(frames): return effects.strip_interlace(frames)[0]       # color|bw|thermal strips
 def _diagint(frames):  return effects.diagonal_interlace(frames)[0]    # random diagonal shards
-def _blockmos(frames): return effects.block_mosaic(frames)[0]          # color regional mosaic
 def _slicestr(frames): return effects.slice_stretch(frames)[0]         # color datamosh smear
+
+# Reference-batch CLIPS (2026-07-18): cheap effects rendered on one burst frame at a time
+# so the SUBJECT MOVES (6fps stop-motion in the viewer). Callable signature
+# ([single_frame], seed, j) — j (frame index) is unused; the fixed per-clip seed keeps the
+# effect's random structure stable so only the subject animates.
+def _c_thermal(frames, seed, j=0): return effects.thermal_map(frames, seed=seed)[0]
+def _c_mosaic(frames, seed, j=0):  return effects.block_mosaic(frames, seed=seed)[0]
+def _c_mirror(frames, seed, j=0):  return effects.mirror_smear(frames, seed=seed)[0]
 
 STILL_PALETTE = [
     ("warhol",              _warhol),   # cheap → first image fast
-    ("thermal map",         _thermal),
     ("slice displacement",  _slice),
-    ("block mosaic",        _blockmos),
     ("water refraction",    _water),
     ("slice stretch",       _slicestr),
     ("slitscan horizontal", _slit_h),
-    ("mirror smear",        _mirror),
     ("liquify",             _liq),
     ("strip interlace",     _stripint),
     ("mondrian",            _mond),
@@ -52,9 +56,12 @@ STILL_PALETTE = [
     ("hockney",             _hock),      # ~3s outlier → rendered LAST
 ]
 
-ANIM_FRAMES = 6   # frames per living-effect clip
+ANIM_FRAMES = 8   # frames per clip (played back as ~6fps stop-motion, ping-pong, in the viewer)
 
-ANIM_PALETTE = []   # No living/animated effects. dither is now a still (B/W); the frame-clip
-                    # playback was strobic. Everything is a smooth still (Ken Burns); slitscan
-                    # gets a smooth CSS vertical sweep.
+# Moving effects — rendered across ANIM_FRAMES burst frames and streamed as a clip.
+ANIM_PALETTE = [
+    ("thermal map",  _c_thermal),
+    ("block mosaic", _c_mosaic),
+    ("mirror smear", _c_mirror),
+]
 FLIPBOOK_KIND = "flipbook"   # raw burst clip, inserted at the front of the playlist
