@@ -135,3 +135,26 @@ def block_mosaic(frames: list[Image.Image], block: int = 40, coverage: float = 0
                 y0, x0 = by * block, bx * block
                 arr[y0:y0 + block, x0:x0 + block] = pooled[by, bx]
     return Image.fromarray(arr)
+
+
+@_timed
+def slice_stretch(frames: list[Image.Image], slice_frac: float = 0.5,
+                  seed: int | None = None) -> Image.Image:
+    """Datamosh horizontal smear (ref 5.25): take one vertical column and streak it
+    across the region to its right, blended under a left->right alpha gradient so it
+    fades from the untouched image into a full sideways smear. `slice_frac` picks the
+    source column (fraction of width)."""
+    src = _middle_frame(frames)
+    arr = np.asarray(src.convert("RGB")).copy()
+    h, w, _ = arr.shape
+    x0 = int(np.clip(slice_frac, 0.0, 0.95) * w)
+    span = w - x0
+    if span <= 1:
+        return Image.fromarray(arr)
+    col = arr[:, x0:x0 + 1, :].astype(np.float32)           # (h, 1, 3)
+    streak = np.repeat(col, span, axis=1)                   # (h, span, 3)
+    region = arr[:, x0:w, :].astype(np.float32)
+    ramp = np.linspace(0.0, 1.0, span, dtype=np.float32)[None, :, None]
+    blended = region * (1.0 - ramp) + streak * ramp
+    arr[:, x0:w, :] = blended.astype(np.uint8)
+    return Image.fromarray(arr)

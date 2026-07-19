@@ -13,6 +13,7 @@ def _mirror(frames): return fx.mirror_smear(frames)[0]
 def _stripint(frames): return fx.strip_interlace(frames)[0]
 def _diagint(frames): return fx.diagonal_interlace(frames)[0]
 def _blockmos(frames): return fx.block_mosaic(frames)[0]
+def _slicestr(frames): return fx.slice_stretch(frames)[0]
 
 EXPERIMENTAL_PALETTE = [
     ("thermal map", _thermal),
@@ -20,4 +21,5 @@ EXPERIMENTAL_PALETTE = [
     ("strip interlace", _stripint),
     ("diagonal interlace", _diagint),
     ("block mosaic", _blockmos),
+    ("slice stretch", _slicestr),
 ]
