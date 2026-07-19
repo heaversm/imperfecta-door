@@ -89,30 +89,29 @@ def mirror_smear(frames: list[Image.Image], offset_frac: float = 0.33,
 
 
 @_timed
-def strip_interlace(frames: list[Image.Image], n_strips: int = 14,
+def strip_interlace(frames: list[Image.Image], n_strips: int = 15,
                     scale_jitter: float = 0.15, shift_px: int = 45,
                     seed: int | None = None) -> Image.Image:
-    """Interlace vertical strips of a B&W base with a color capture (ref 5.33). Each color
-    strip samples from a copy of the color frame that is randomly scaled (±`scale_jitter`)
-    and shifted (±`shift_px`), so every strip's content misaligns with its neighbours —
-    the fractured interlace. B&W base stays upright; light grain."""
+    """Interlace vertical strips cycling through three treatments — color, B&W, and a
+    thermal-mapped copy (ref 5.33). Each strip samples from a copy of its treatment that
+    is randomly scaled (±`scale_jitter`) and shifted (±`shift_px`), so content misaligns
+    strip-to-strip. Light grain on the B&W."""
     rng = random.Random(seed)
     n = len(frames)
     color_img = frames[n // 2].convert("RGB")
-    bw = np.asarray(_bw_treatment(frames[n // 4] if n >= 4 else frames[0],
-                                  grain=0.03, seed=seed))
-    h, w, _ = bw.shape
-    out = bw.copy()
+    bw_img = _bw_treatment(frames[n // 4] if n >= 4 else frames[0], grain=0.03, seed=seed)
+    thermal_img = thermal_map([frames[n // 2]])[0]           # colored thermal treatment
+    treatments = [color_img, bw_img, thermal_img]           # strip i -> treatments[i % 3]
+    w, h = color_img.size
+    out = np.asarray(bw_img).copy()
     strip_w = max(1, w // n_strips)
     for i in range(n_strips):
-        if i % 2 == 0:                            # even strips stay B&W (the base)
-            continue
         x0 = i * strip_w
         if x0 >= w:
             break
         x1 = w if i == n_strips - 1 else min(w, (i + 1) * strip_w)
         s = 1.0 + rng.uniform(-scale_jitter, scale_jitter)
-        layer = _scaled_shifted(color_img, s, rng.randint(-shift_px, shift_px),
+        layer = _scaled_shifted(treatments[i % 3], s, rng.randint(-shift_px, shift_px),
                                 rng.randint(-shift_px, shift_px))
         out[:, x0:x1] = layer[:, x0:x1]
     return Image.fromarray(out)
@@ -190,9 +189,9 @@ def block_mosaic(frames: list[Image.Image], block: int = 40, coverage: float = 0
 def slice_stretch(frames: list[Image.Image], slice_frac: float = 0.5,
                   seed: int | None = None) -> Image.Image:
     """Datamosh horizontal smear (ref 5.25): take one vertical column and streak it
-    across the region to its right, blended under a left->right alpha gradient so it
-    fades from the untouched image into a full sideways smear. `slice_frac` picks the
-    source column (fraction of width)."""
+    across the region to its right. The streak is fully opaque at the source column
+    (center) and fades to 0% — the untouched image — at the right edge. `slice_frac`
+    picks the source column (fraction of width)."""
     src = _middle_frame(frames)
     arr = np.asarray(src.convert("RGB")).copy()
     h, w, _ = arr.shape
@@ -203,7 +202,7 @@ def slice_stretch(frames: list[Image.Image], slice_frac: float = 0.5,
     col = arr[:, x0:x0 + 1, :].astype(np.float32)           # (h, 1, 3)
     streak = np.repeat(col, span, axis=1)                   # (h, span, 3)
     region = arr[:, x0:w, :].astype(np.float32)
-    ramp = np.linspace(0.0, 1.0, span, dtype=np.float32)[None, :, None]
+    ramp = np.linspace(1.0, 0.0, span, dtype=np.float32)[None, :, None]  # opaque at center -> 0 at right
     blended = region * (1.0 - ramp) + streak * ramp
     arr[:, x0:w, :] = blended.astype(np.uint8)
     return Image.fromarray(arr)
