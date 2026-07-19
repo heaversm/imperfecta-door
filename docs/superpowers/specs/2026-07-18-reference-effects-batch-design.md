@@ -118,26 +118,26 @@ datamosh horizontal-smear look.
 
 ## Isolation (keep production untouched)
 
-The production gallery server (`effects_server.py`, runs on the Pi) and the Mac
-preview rig **both** import the roster from `prototype/palette.py` today, so anything
-added to `STILL_PALETTE` ships to the gallery immediately. To keep experimental work
-out of the production experience until we choose to promote it:
+`deploy.sh` copies `effects_server.py`, `palette.py`, and `effects/effects.py` flat
+into the Pi's home dir, and the production server does `from palette import ...`.
+So **`palette.py` and `effects.py` are production files** — modifying `palette.py` to
+import an experimental module would crash the Pi on startup (the experimental file is
+never deployed). To keep experimental work fully out of production until we promote it:
 
-1. **New effect functions live in a dedicated module:**
-   `prototype/effects/effects_experimental.py`. Tossing an effect = delete its
-   function (or its one roster line). `effects.py` (the production library) is only
-   touched by the single shared helper below.
-2. **A separate experimental roster:** `EXPERIMENTAL_PALETTE` in
-   `prototype/palette.py` (a new list, alongside `STILL_PALETTE`). The **preview rig
-   imports and renders it**; `effects_server.py` does **not** import it. Production
-   `STILL_PALETTE` is left exactly as-is.
-3. **Promotion is deliberate and per-effect:** once an effect is approved, move its
-   function into `effects.py` and add one line to `STILL_PALETTE`. Nothing reaches the
-   gallery loop before that step.
-
-The one exception that touches production code: the shared helper `_gradient_map`
-(generalizes `_duotone`) is added to `effects.py` since it's a pure, reusable
-primitive — it changes no existing behavior and adds nothing to the production roster.
+1. **New effect functions live in a dedicated new module:**
+   `prototype/effects/effects_experimental.py`. It also holds the one new helper,
+   `_gradient_map` (generalizes `_duotone`), so `effects.py` stays untouched too.
+2. **A separate experimental roster in its own new file:**
+   `prototype/effects/experimental_palette.py` exports `EXPERIMENTAL_PALETTE`. Only the
+   **Mac preview rig imports it**; `palette.py` and `effects_server.py` never reference
+   it, and neither new file is added to `deploy.sh`, so nothing reaches the Pi.
+3. **Production files are literally unchanged this pass:** `palette.py`, `effects.py`,
+   `effects_server.py`, and `deploy.sh` are not modified. The only edits to existing
+   files are to two dev-only tools (`preview_rig.py`, `validate_effect.py`).
+4. **Promotion is deliberate and per-effect:** once an effect is approved, move its
+   function (and `_gradient_map`, when thermal is promoted) into `effects.py` and add
+   one line to `STILL_PALETTE`. The function then lives in a deployed production file;
+   the experimental files stay off the Pi. Nothing reaches the gallery before that step.
 
 ## Architecture
 
@@ -179,21 +179,30 @@ grid with per-effect timings (so we catch anything too slow for the Pi early). R
 `validate_effect.py` on each new function for the contract checks (size, mode, purity,
 seed-reproducibility). No Pi deploy until the look is approved from the preview rig.
 
-## Phase 2 — animation (out of scope for this pass, noted for continuity)
+## Phase 2 — animation (implemented as stop-motion clips)
 
-After the stills are approved, add motion **in the viewer via CSS transforms** on the
-rendered still — zero extra Pi compute, reusing the existing Ken Burns / vertical-sweep
-machinery:
+**Approach decided during preview:** CSS transforms on a frozen still (the original
+plan) were rejected — the ask is for the *captures themselves to move*. Instead we
+revived the dormant clip mechanism: an effect is rendered on each of `ANIM_FRAMES`
+burst frames (fixed per-clip seed → stable structure, moving subject) and played back
+as a **6fps ping-pong stop-motion clip** in the viewer.
 
-- Thermal gradient map → slow hue/position drift of the gradient overlay.
-- Vertical slice stretch → the streak region sweeps horizontally.
-- Regional mosaic → block-by-block reveal.
-- (Ring rotation / puzzle-tile slides from Tier 2 are the natural next candidates if we
-  extend beyond the six.)
+- Mechanism already existed end-to-end: `effects_server.py` renders `ANIM_PALETTE`
+  across the burst and streams `kind:'clip'`; the viewer's `playFlipbook` plays clips at
+  `FLIP_FPS=6` ping-pong. Wiring = repopulating `ANIM_PALETTE` in `palette.py`; no change
+  to `effects_server.py` or `viewer.html`.
+- **Clips (moving):** thermal map, block mosaic, mirror smear — cheap enough to render
+  per-frame. `ANIM_FRAMES=8`.
+- **Stills (Ken Burns):** strip interlace and diagonal interlace are too heavy to render
+  per burst frame on the Pi; slice stretch reads fine as a still. These stay in
+  `STILL_PALETTE`.
+- **Pi performance is the open gate:** clips are N× the per-effect cost. Must be
+  validated on the Pi 3B+ (deploy + watch `effects_server` per-effect timings, or run
+  `validate_effect.py` on the Pi). If too slow, reduce `ANIM_FRAMES`, drop an effect, or
+  fix per-frame auto-contrast flicker by computing the contrast reference once.
 
-The genuinely animation-dependent reference — particle dissolve (5.27 / 5.35) — is
-explicitly **deferred**; it wants WebGL/canvas and belongs with the melt-shader track,
-not this numpy-stills batch.
+The genuinely animation-dependent reference — particle dissolve (5.27 / 5.35) — remains
+**deferred**; it wants WebGL/canvas and belongs with the melt-shader track.
 
 ## Out of scope
 
