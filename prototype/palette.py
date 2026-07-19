@@ -27,13 +27,27 @@ def _slice(frames):  return effects.slice_displacement(frames)[0]      # still (
 def _mond(frames):   return effects.mondrian(frames)[0]                # color (still — gets Ken Burns)
 def _dither(frames): return effects.dither(frames, fg=(255, 255, 255), bg=(0, 0, 0))[0]  # B/W stipple (still)
 
+# Reference-batch effects (2026-07-18): thermal/interlace/mosaic/smear family.
+def _thermal(frames):  return effects.thermal_map(frames)[0]           # color spectral map
+def _mirror(frames):   return effects.mirror_smear(frames)[0]          # B&W offset mirror
+def _stripint(frames): return effects.strip_interlace(frames)[0]       # color|bw|thermal strips
+def _diagint(frames):  return effects.diagonal_interlace(frames)[0]    # random diagonal shards
+def _blockmos(frames): return effects.block_mosaic(frames)[0]          # color regional mosaic
+def _slicestr(frames): return effects.slice_stretch(frames)[0]         # color datamosh smear
+
 STILL_PALETTE = [
     ("warhol",              _warhol),   # cheap → first image fast
+    ("thermal map",         _thermal),
     ("slice displacement",  _slice),
+    ("block mosaic",        _blockmos),
     ("water refraction",    _water),
+    ("slice stretch",       _slicestr),
     ("slitscan horizontal", _slit_h),
+    ("mirror smear",        _mirror),
     ("liquify",             _liq),
+    ("strip interlace",     _stripint),
     ("mondrian",            _mond),
+    ("diagonal interlace",  _diagint),
     ("dither",              _dither),
     ("hockney",             _hock),      # ~3s outlier → rendered LAST
 ]
