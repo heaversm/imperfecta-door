@@ -54,18 +54,6 @@
      frame playback). Extra scale gives overscan so the translate never reveals an edge. */
   @keyframes kbsweep { from { transform: scale(1.14) translateY(-7%); } to { transform: scale(1.14) translateY(7%); } }
   #stage img.kbsweep { animation: kbsweep 5s ease-in-out forwards; }
-  /* Horizontal sweep — for effects whose structure runs vertically (strip interlace) or
-     whose smear runs horizontally (slice stretch); the glide crosses/travels the pattern. */
-  @keyframes kbsweepx { from { transform: scale(1.14) translateX(-7%); } to { transform: scale(1.14) translateX(7%); } }
-  #stage img.kbsweepx { animation: kbsweepx 5s ease-in-out forwards; }
-  /* Slow rotate + overscan zoom — emphasizes diagonal-shard geometry; the extra scale
-     keeps the rotated corners from revealing an edge. */
-  @keyframes kbrot { from { transform: scale(1.18) rotate(-2.2deg); } to { transform: scale(1.18) rotate(2.2deg); } }
-  #stage img.kbrot { animation: kbrot 6s ease-in-out forwards; }
-  /* Hue drift — the thermal/spectral map's colored light slowly sweeps through the
-     spectrum. Pure CSS filter, GPU-composited; paired with a gentle zoom. */
-  @keyframes kbhue { from { transform: scale(1.03); filter: hue-rotate(-25deg); } to { transform: scale(1.07); filter: hue-rotate(35deg); } }
-  #stage img.kbhue { animation: kbhue 6s ease-in-out forwards; }
   /* Optional status dot for debugging — hidden by default. */
   #status {
     position: fixed;
@@ -258,18 +246,7 @@ async function showLive() {
   return true;
 }
 
-const KB_CLASSES = ['kb1', 'kb2', 'kb3', 'kbsweep', 'kbsweepx', 'kbrot', 'kbhue'];
-
-// Map an effect name to its motion class. Motion is a pure CSS transform/filter on the
-// already-rendered still (no extra server render). Names arrive on the `append` event.
-function motionFor(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('thermal')) return 'kbhue';                                  // spectral hue drift
-  if (n.includes('slit') || n.includes('mirror')) return 'kbsweep';           // vertical glide
-  if (n.includes('strip') || n.includes('slice stretch')) return 'kbsweepx';  // horizontal glide
-  if (n.includes('diagonal')) return 'kbrot';                                 // rotate + overscan zoom
-  return 'kb' + (kbIdx++ % 3 + 1);                                            // default Ken Burns
-}
+const KB_CLASSES = ['kb1', 'kb2', 'kb3', 'kbsweep'];
 
 function showStill(url, kb = '') {
   // Preload into the back layer, then crossfade. `kb` is the motion class to apply
@@ -329,9 +306,10 @@ async function step() {
     await playFlipbook(item.frames);
     setTimeout(step, 200);
   } else {
-    // Motion per effect — vertical/horizontal sweeps, rotate, or hue drift by name;
-    // everything else falls back to a cycled Ken Burns drift.
-    showStill(item.url, motionFor(item.name));
+    // Slitscan smears along the time axis → give it the smooth vertical sweep; everything
+    // else gets a cycled Ken Burns drift.
+    const kb = /slit/i.test(item.name || '') ? 'kbsweep' : ('kb' + (kbIdx++ % 3 + 1));
+    showStill(item.url, kb);
     stillsSinceLive++;
     setTimeout(step, SLIDE_MS + FADE_MS);
   }
