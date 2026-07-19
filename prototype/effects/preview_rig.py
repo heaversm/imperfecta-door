@@ -37,6 +37,19 @@ CAMERA_INDEX = 0         # 0 = default Mac webcam
 CAPTURE_WIDTH = 1280     # request from camera (camera picks closest supported)
 CAPTURE_HEIGHT = 720
 PORT = 8000
+
+# Clip prototypes — render a few cheap effects across the burst so the SUBJECT MOVES
+# (real temporal animation, not a pan on a still). Preview-only; lets us compare a
+# stop-motion vs a smoother playback before committing on the Pi. Each is a pure
+# frames->Image effect rendered on one burst frame at a time with a fixed seed, so the
+# random structure stays put and only the subject animates.
+CLIP_EFFECTS = [
+    ("thermal map",  effects.thermal_map),
+    ("block mosaic", effects.block_mosaic),
+    ("mirror smear", effects.mirror_smear),
+]
+CLIP_FRAMES = 16         # frames rendered across the burst per clip effect
+CLIP_SEED = 7            # fixed per-clip seed → stable structure, moving subject
 # ───────────────────────────────────────────────────────────────────────────
 
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -137,11 +150,29 @@ def capture():
             "ms": round(r["ms"], 1),
         })
 
+    # Render clip prototypes: each effect across CLIP_FRAMES evenly-sampled burst frames.
+    clips = []
+    n = len(frames)
+    if n >= 2:
+        sample = [round(i * (n - 1) / (CLIP_FRAMES - 1)) for i in range(CLIP_FRAMES)]
+        for name, fn in CLIP_EFFECTS:
+            urls = []
+            for j, fi in enumerate(sample):
+                res = fn([frames[fi]], seed=CLIP_SEED)
+                img = res[0] if isinstance(res, tuple) else res   # @_timed -> (img, ms)
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                fname = f"clip_{name.replace(' ', '_')}_{j:02d}.jpg"
+                img.save(session_dir / fname, quality=85)
+                urls.append(f"/output/{timestamp}/{fname}")
+            clips.append({"name": name, "frames": urls})
+
     return jsonify({
         "session": timestamp,
         "capture_ms": round(capture_ms, 1),
         "n_frames": len(frames),
         "results": payload,
+        "clips": clips,
         "source_url": f"/output/{timestamp}/_source_middle.jpg",
     })
 
@@ -249,7 +280,10 @@ async function capture() {
   }
 }
 
+let clipTimers = [];   // playback intervals for clip tiles — cleared on each re-render
+
 function render(data) {
+  clipTimers.forEach(clearInterval); clipTimers = [];
   grid.innerHTML = '';
   // Source frame first
   grid.appendChild(makeTile({
@@ -260,6 +294,37 @@ function render(data) {
   for (const r of data.results) {
     grid.appendChild(makeTile(r, false));
   }
+  // Clip prototypes: two tiles per effect — stop-motion (every other frame, slow) vs
+  // smooth (all frames, faster) — so the subject actually moves. Compare the two looks.
+  for (const c of (data.clips || [])) {
+    const stop = c.frames.filter((_, k) => k % 2 === 0);   // half the frames
+    grid.appendChild(makeClipTile(c.name + ' — stop-motion', stop, 6));
+    grid.appendChild(makeClipTile(c.name + ' — smooth', c.frames, 12));
+  }
+}
+
+function makeClipTile(label, frames, fps) {
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  const img = document.createElement('img');
+  img.src = frames[0];
+  frames.forEach(u => { const p = new Image(); p.src = u; });   // preload for smooth playback
+  let i = 0;
+  clipTimers.push(setInterval(() => { i = (i + 1) % frames.length; img.src = frames[i]; }, 1000 / fps));
+  img.addEventListener('click', () => { lbImg.src = img.src; lb.classList.add('open'); });
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = label;
+  meta.appendChild(name);
+  const tag = document.createElement('span');
+  tag.className = 'ms';
+  tag.textContent = fps + ' fps';
+  meta.appendChild(tag);
+  tile.appendChild(img);
+  tile.appendChild(meta);
+  return tile;
 }
 
 function makeTile(r, isSource) {
