@@ -11,9 +11,11 @@ import effects_experimental as fx  # noqa: F401  (used by wrappers added per eff
 def _thermal(frames): return fx.thermal_map(frames)[0]
 def _mirror(frames): return fx.mirror_smear(frames)[0]
 def _stripint(frames): return fx.strip_interlace(frames)[0]
+def _diagint(frames): return fx.diagonal_interlace(frames)[0]
 
 EXPERIMENTAL_PALETTE = [
     ("thermal map", _thermal),
     ("mirror smear", _mirror),
     ("strip interlace", _stripint),
+    ("diagonal interlace", _diagint),
 ]

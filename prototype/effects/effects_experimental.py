@@ -94,3 +94,21 @@ def strip_interlace(frames: list[Image.Image], n_strips: int = 14,
         x1 = w if i == n_strips - 1 else min(w, (i + 1) * strip_w)
         out[:, x0:x1] = color[:, x0:x1]
     return Image.fromarray(out)
+
+
+@_timed
+def diagonal_interlace(frames: list[Image.Image], offset_frac: float = 0.06,
+                       seed: int | None = None) -> Image.Image:
+    """Diagonal bisect (ref 5.37): lower-left triangle = B&W, upper-right triangle = a
+    horizontally offset color copy, so the mono and color halves interlace at the
+    diagonal seam."""
+    src = _middle_frame(frames)
+    color = np.asarray(src.convert("RGB"))
+    bw = np.asarray(_bw_treatment(src, seed=seed))
+    h, w, _ = color.shape
+    ys, xs = np.indices((h, w), dtype=np.float32)
+    mask = (xs / w + ys / h) > 1.0                          # upper-right triangle
+    dx = int(w * offset_frac)
+    color_shift = np.roll(color, dx, axis=1)
+    out = np.where(mask[..., None], color_shift, bw)
+    return Image.fromarray(out.astype(np.uint8))
