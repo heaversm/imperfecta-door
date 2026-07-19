@@ -71,3 +71,26 @@ def mirror_smear(frames: list[Image.Image], split: float = 0.5,
     y1 = min(h, y0 + band)
     out[y0:y1] = np.repeat(seam, y1 - y0, axis=0)
     return Image.fromarray(out)
+
+
+@_timed
+def strip_interlace(frames: list[Image.Image], n_strips: int = 14,
+                    seed: int | None = None) -> Image.Image:
+    """Interlace vertical strips of a B&W capture with a color capture taken from a
+    different point in the burst (ref 5.33). Even strips stay B&W (the base); odd strips
+    are replaced with the color frame, so the two captures interleave."""
+    n = len(frames)
+    color = np.asarray(frames[n // 2].convert("RGB"))
+    bw = np.asarray(_bw_treatment(frames[n // 4] if n >= 4 else frames[0], seed=seed))
+    h, w, _ = color.shape
+    out = bw.copy()
+    strip_w = max(1, w // n_strips)
+    for i in range(n_strips):
+        if i % 2 == 0:
+            continue
+        x0 = i * strip_w
+        if x0 >= w:
+            break
+        x1 = w if i == n_strips - 1 else min(w, (i + 1) * strip_w)
+        out[:, x0:x1] = color[:, x0:x1]
+    return Image.fromarray(out)
