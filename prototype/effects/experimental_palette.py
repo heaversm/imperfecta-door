@@ -7,4 +7,9 @@ STILL_PALETTE entry in palette.py.
 """
 import effects_experimental as fx  # noqa: F401  (used by wrappers added per effect)
 
-EXPERIMENTAL_PALETTE = []
+
+def _thermal(frames): return fx.thermal_map(frames)[0]
+
+EXPERIMENTAL_PALETTE = [
+    ("thermal map", _thermal),
+]

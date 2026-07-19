@@ -33,3 +33,20 @@ def _gradient_map(gray_arr: np.ndarray, stops: list[tuple[int, int, int]]) -> Im
     idx = np.clip(gray_arr, 0, 255).astype(np.uint8)
     out = lut[idx]                                             # (H, W, 3)
     return Image.fromarray(out.astype(np.uint8))
+
+
+@_timed
+def thermal_map(frames: list[Image.Image], spatial: float = 0.35,
+                seed: int | None = None) -> Image.Image:
+    """Spectral 'thermal' gradient map (ref 5.26): source luminance blended with a
+    diagonal positional ramp, mapped through a teal -> red -> orange -> yellow -> green
+    LUT, so colored light sweeps across the subject. `spatial` sets how much the
+    diagonal ramp biases the mapping (0 = pure luminance heatmap)."""
+    src = _middle_frame(frames)
+    gray = np.asarray(ImageOps.autocontrast(src.convert("L"), cutoff=2)).astype(np.float32)
+    h, w = gray.shape
+    ys, xs = np.indices((h, w), dtype=np.float32)
+    diag = (xs / w + (1.0 - ys / h)) * 0.5 * 255.0          # brightest toward upper-right
+    idx = np.clip((1.0 - spatial) * gray + spatial * diag, 0, 255)
+    stops = [(12, 40, 55), (200, 30, 45), (240, 120, 30), (240, 220, 60), (70, 180, 95)]
+    return _gradient_map(idx, stops)
