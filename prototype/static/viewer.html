@@ -128,6 +128,8 @@ const FLIP_LOOPS = 1;      // ping-pong passes before advancing
 const CARD_MS = 5000;      // dwell on each prompt card (long enough to read)
 const LIVE_MS = 5000;      // dwell on the live mirror segment
 const LIVE_EVERY = 3;      // show the live mirror after this many stills
+const QUOTE_EVERY = 3;     // show an Oblique Strategy card after this many effects (also
+                           // breaks up repetition while a fresh playlist is still assembling)
 
 // Curated Oblique Strategies (Brian Eno & Peter Schmidt) — the universal, reaction-
 // provoking lines; studio-specific ones are dropped. Shown one per loop.
@@ -191,6 +193,7 @@ let handedOver = false;    // has the building playlist taken over the live loop
 let idx = 0;
 let everConnected = false;
 let stillsSinceLive = 0;   // stills shown since the last live-mirror segment
+let effectsSinceCard = 0;  // effects shown since the last interleaved quote card
 let liveStream = null;     // getUserMedia stream while the mirror is active
 
 function preload(urls) { urls.forEach(u => { const im = new Image(); im.src = u; }); }
@@ -296,6 +299,16 @@ async function step() {
     stillsSinceLive = 0;
     if (await showLive()) { setTimeout(step, 200); return; }
   }
+  // Interleave an Oblique Strategy card between effects (every QUOTE_EVERY). This also
+  // fills the loop while a fresh playlist is still assembling, so the same 1-2 ready
+  // effects aren't shown back-to-back. The card sits BETWEEN effects — it doesn't skip one.
+  if (effectsSinceCard >= QUOTE_EVERY) {
+    effectsSinceCard = 0;
+    doFlash(true);
+    showCard(randomStrategy());
+    setTimeout(step, CARD_MS + FADE_MS);
+    return;
+  }
   const item = active[idx % active.length];
   idx++;
   doFlash(true);   // quick flash punctuating every effect-to-effect transition
@@ -303,6 +316,7 @@ async function step() {
     showCard(randomStrategy());
     setTimeout(step, CARD_MS + FADE_MS);
   } else if (item.kind === 'flipbook' || item.kind === 'clip') {
+    effectsSinceCard++;
     await playFlipbook(item.frames);
     setTimeout(step, 200);
   } else {
@@ -311,6 +325,7 @@ async function step() {
     const kb = /slit/i.test(item.name || '') ? 'kbsweep' : ('kb' + (kbIdx++ % 3 + 1));
     showStill(item.url, kb);
     stillsSinceLive++;
+    effectsSinceCard++;
     setTimeout(step, SLIDE_MS + FADE_MS);
   }
 }
@@ -369,9 +384,9 @@ function connect() {
     if (!handedOver && building.length >= 2) { active = building; idx = 0; handedOver = true; }
   });
   es.addEventListener('playlist-end', () => {
-    // Cap the loop with a prompt card → shows after all effects, then loops back to the top.
+    // Finalize the playlist. Quote cards are now interleaved live in step() (every
+    // QUOTE_EVERY effects), so we no longer append a single card here.
     if (!building) return;
-    building.push({ kind: 'card' });
     active = building;
   });
 }
