@@ -27,20 +27,43 @@ def _slice(frames):  return effects.slice_displacement(frames)[0]      # still (
 def _mond(frames):   return effects.mondrian(frames)[0]                # color (still — gets Ken Burns)
 def _dither(frames): return effects.dither(frames, fg=(255, 255, 255), bg=(0, 0, 0))[0]  # B/W stipple (still)
 
+# Reference-batch STILLS (2026-07-18): interlace / smear family. These stay stills —
+# strip & diagonal interlace are too heavy to render per-frame on the Pi; slice stretch
+# reads fine as a still.
+def _stripint(frames): return effects.strip_interlace(frames)[0]       # color|bw|thermal strips
+def _diagint(frames):  return effects.diagonal_interlace(frames)[0]    # random diagonal shards
+def _slicestr(frames): return effects.slice_stretch(frames)[0]         # color datamosh smear
+
+# Reference-batch CLIPS (2026-07-18): cheap effects rendered on one burst frame at a time
+# so the SUBJECT MOVES (6fps stop-motion in the viewer). Callable signature
+# ([single_frame], seed, j) — j (frame index) is unused; the fixed per-clip seed keeps the
+# effect's random structure stable so only the subject animates.
+def _c_thermal(frames, seed, j=0): return effects.thermal_map(frames, seed=seed)[0]
+def _c_mosaic(frames, seed, j=0):  return effects.block_mosaic(frames, seed=seed)[0]
+def _c_mirror(frames, seed, j=0):  return effects.mirror_smear(frames, seed=seed)[0]
+
+# Ordered cheapest-first by measured Pi 3B+ render time, so a real effect appears within
+# ~1/2s of the burst finishing; the heavy ones stream in behind. hockney stays LAST.
 STILL_PALETTE = [
-    ("warhol",              _warhol),   # cheap → first image fast
-    ("slice displacement",  _slice),
-    ("water refraction",    _water),
-    ("slitscan horizontal", _slit_h),
-    ("liquify",             _liq),
-    ("mondrian",            _mond),
-    ("dither",              _dither),
-    ("hockney",             _hock),      # ~3s outlier → rendered LAST
+    ("mondrian",            _mond),      # ~89ms
+    ("slice stretch",       _slicestr),  # ~100ms
+    ("warhol",              _warhol),    # ~166ms
+    ("dither",              _dither),    # ~187ms
+    ("slice displacement",  _slice),     # ~225ms
+    ("water refraction",    _water),     # ~397ms
+    ("slitscan horizontal", _slit_h),    # ~653ms
+    ("liquify",             _liq),       # ~727ms
+    ("diagonal interlace",  _diagint),   # ~1.6s
+    ("strip interlace",     _stripint),  # ~2.2s
+    ("hockney",             _hock),      # ~2.7s outlier → LAST
 ]
 
-ANIM_FRAMES = 6   # frames per living-effect clip
+ANIM_FRAMES = 8   # frames per clip (played back as ~6fps stop-motion, ping-pong, in the viewer)
 
-ANIM_PALETTE = []   # No living/animated effects. dither is now a still (B/W); the frame-clip
-                    # playback was strobic. Everything is a smooth still (Ken Burns); slitscan
-                    # gets a smooth CSS vertical sweep.
+# Moving effects — rendered across ANIM_FRAMES burst frames and streamed as a clip.
+ANIM_PALETTE = [
+    ("thermal map",  _c_thermal),
+    ("block mosaic", _c_mosaic),
+    ("mirror smear", _c_mirror),
+]
 FLIPBOOK_KIND = "flipbook"   # raw burst clip, inserted at the front of the playlist

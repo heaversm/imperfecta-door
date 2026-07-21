@@ -31,6 +31,14 @@
     transition: opacity 600ms ease-in-out;
   }
   #stage img.visible { opacity: 1; }
+  /* Live camera mirror — interspersed into the idle loop so approaching visitors see
+     themselves and realize it's a camera. Mirrored like a selfie; sits above the stills. */
+  #live {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; transform: scaleX(-1);
+    opacity: 0; transition: opacity 600ms ease-in-out; z-index: 5; background: #000;
+  }
+  #live.visible { opacity: 1; }
   /* Ken Burns — a slow scale + drift on each still during its dwell. Pure CSS transform
      on the already-rendered image (zero extra server render), composited by the Pi. A few
      variants cycled per slide so it's not always the same move. transform-origin centers it. */
@@ -98,6 +106,7 @@
 <div id="stage">
   <img id="a" alt="">
   <img id="b" alt="">
+  <video id="live" autoplay playsinline muted></video>
 </div>
 <div id="card"></div>
 <div id="status"></div>
@@ -109,6 +118,7 @@ const b = document.getElementById('b');
 const status = document.getElementById('status');
 const flash = document.getElementById('flash');
 const card = document.getElementById('card');
+const live = document.getElementById('live');
 let front = a, back = b;
 
 const SLIDE_MS = 4000;     // dwell per still
@@ -116,6 +126,10 @@ const FADE_MS = 600;       // matches the CSS opacity transition
 const FLIP_FPS = 6;        // flipbook playback rate
 const FLIP_LOOPS = 1;      // ping-pong passes before advancing
 const CARD_MS = 5000;      // dwell on each prompt card (long enough to read)
+const LIVE_MS = 5000;      // dwell on the live mirror segment
+const LIVE_EVERY = 3;      // show the live mirror after this many stills
+const QUOTE_EVERY = 3;     // show an Oblique Strategy card after this many effects (also
+                           // breaks up repetition while a fresh playlist is still assembling)
 
 // Curated Oblique Strategies (Brian Eno & Peter Schmidt) — the universal, reaction-
 // provoking lines; studio-specific ones are dropped. Shown one per loop.
@@ -178,6 +192,9 @@ let building = null;       // playlist being assembled from a new capture
 let handedOver = false;    // has the building playlist taken over the live loop yet?
 let idx = 0;
 let everConnected = false;
+let stillsSinceLive = 0;   // stills shown since the last live-mirror segment
+let effectsSinceCard = 0;  // effects shown since the last interleaved quote card
+let liveStream = null;     // getUserMedia stream while the mirror is active
 
 function preload(urls) { urls.forEach(u => { const im = new Image(); im.src = u; }); }
 
@@ -196,6 +213,40 @@ function showCard(text) {
   // showStill/playFlipbook fade it back out when the next effect comes up.
   card.textContent = text;
   card.classList.add('visible');
+}
+
+// ── Live camera mirror ──────────────────────────────────────────────
+// The C920 allows one consumer at a time; effects_server grabs it (ffmpeg) on each
+// ring. So we hold the camera only while the mirror is on screen, and release it the
+// instant a ring lands (the 'flash' event) — effects_server waits a beat before its
+// grab so the release wins the race. Reacquired next time the mirror comes up.
+async function startLive() {
+  if (liveStream) return true;
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 360, facingMode: 'user' }, audio: false,
+    });
+    live.srcObject = liveStream;
+    return true;
+  } catch (e) {
+    console.warn('live camera unavailable:', e);
+    liveStream = null;
+    return false;
+  }
+}
+function stopLive() {
+  if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+  live.srcObject = null;
+  live.classList.remove('visible');
+}
+async function showLive() {
+  if (!(await startLive())) return false;
+  card.classList.remove('visible');
+  live.classList.add('visible');
+  await new Promise(r => setTimeout(r, LIVE_MS));
+  live.classList.remove('visible');
+  await new Promise(r => setTimeout(r, FADE_MS));
+  return true;
 }
 
 const KB_CLASSES = ['kb1', 'kb2', 'kb3', 'kbsweep'];
@@ -235,7 +286,29 @@ async function playFlipbook(frames) {
 }
 
 async function step() {
-  if (!active.length) { setTimeout(step, 500); return; }   // nothing yet — wait for a ring
+  // Nothing rendered yet (fresh boot, no ring) — loop the live mirror so people walking
+  // up see themselves instead of a black screen.
+  if (!active.length) {
+    const shown = await showLive();
+    setTimeout(step, shown ? 200 : 500);
+    return;
+  }
+  // Intersperse the live mirror every LIVE_EVERY stills so approaching visitors realize
+  // it's a camera (rather than only seeing the previous visitor's photos).
+  if (stillsSinceLive >= LIVE_EVERY) {
+    stillsSinceLive = 0;
+    if (await showLive()) { setTimeout(step, 200); return; }
+  }
+  // Interleave an Oblique Strategy card between effects (every QUOTE_EVERY). This also
+  // fills the loop while a fresh playlist is still assembling, so the same 1-2 ready
+  // effects aren't shown back-to-back. The card sits BETWEEN effects — it doesn't skip one.
+  if (effectsSinceCard >= QUOTE_EVERY) {
+    effectsSinceCard = 0;
+    doFlash(true);
+    showCard(randomStrategy());
+    setTimeout(step, CARD_MS + FADE_MS);
+    return;
+  }
   const item = active[idx % active.length];
   idx++;
   doFlash(true);   // quick flash punctuating every effect-to-effect transition
@@ -243,6 +316,7 @@ async function step() {
     showCard(randomStrategy());
     setTimeout(step, CARD_MS + FADE_MS);
   } else if (item.kind === 'flipbook' || item.kind === 'clip') {
+    effectsSinceCard++;
     await playFlipbook(item.frames);
     setTimeout(step, 200);
   } else {
@@ -250,6 +324,8 @@ async function step() {
     // else gets a cycled Ken Burns drift.
     const kb = /slit/i.test(item.name || '') ? 'kbsweep' : ('kb' + (kbIdx++ % 3 + 1));
     showStill(item.url, kb);
+    stillsSinceLive++;
+    effectsSinceCard++;
     setTimeout(step, SLIDE_MS + FADE_MS);
   }
 }
@@ -277,7 +353,7 @@ function connect() {
   };
   es.addEventListener('reload', () => location.reload());   // deploy.sh nudges new viewer.html live without a reboot
   es.addEventListener('goto', (e) => { location.href = JSON.parse(e.data).url; });   // flip kiosk to /shader etc.
-  es.addEventListener('flash', () => doFlash(false));   // big flash the instant a trigger lands
+  es.addEventListener('flash', () => { stopLive(); doFlash(false); });   // release the camera for the capture + big flash
   es.addEventListener('first', (e) => {
     // Instant static first photo — show it immediately, no motion, until the loop hands over.
     showStill(JSON.parse(e.data).url, '');
@@ -308,9 +384,9 @@ function connect() {
     if (!handedOver && building.length >= 2) { active = building; idx = 0; handedOver = true; }
   });
   es.addEventListener('playlist-end', () => {
-    // Cap the loop with a prompt card → shows after all effects, then loops back to the top.
+    // Finalize the playlist. Quote cards are now interleaved live in step() (every
+    // QUOTE_EVERY effects), so we no longer append a single card here.
     if (!building) return;
-    building.push({ kind: 'card' });
     active = building;
   });
 }

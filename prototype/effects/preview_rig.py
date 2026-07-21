@@ -28,6 +28,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import effects   # noqa: E402  (path set above)
 import palette    # noqa: E402  (the shared roster — same effects the gallery loop uses)
+import experimental_palette   # noqa: E402  (preview-only experimental roster; not deployed)
 
 # ─── Config ────────────────────────────────────────────────────────────────
 BURST_FRAMES = 30        # how many frames per capture
@@ -37,6 +38,9 @@ CAPTURE_WIDTH = 1280     # request from camera (camera picks closest supported)
 CAPTURE_HEIGHT = 720
 PORT = 8000
 # ───────────────────────────────────────────────────────────────────────────
+# Clip effects (the moving ones) come from palette.ANIM_PALETTE — same roster the gallery
+# renders — so the preview matches production. Rendered here across ANIM_FRAMES burst
+# frames and played back 6fps ping-pong in the browser, mirroring the viewer's playFlipbook.
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -98,8 +102,9 @@ def run_all_effects(frames: list[Image.Image]) -> list[dict]:
 
     for name, fn in palette.STILL_PALETTE:
         timed(name, fn, frames)
-    for name, fn in palette.ANIM_PALETTE:
-        timed(name, fn, middle, 0)   # living effects: preview the middle frame as a still
+    for name, fn in experimental_palette.EXPERIMENTAL_PALETTE:
+        timed(name, fn, frames)      # experimental (preview-only) effects
+    # ANIM_PALETTE (moving) effects are previewed as clips in /capture, not as stills here.
     return results
 
 
@@ -134,11 +139,31 @@ def capture():
             "ms": round(r["ms"], 1),
         })
 
+    # Render the ANIM_PALETTE clips: each effect across ANIM_FRAMES evenly-sampled burst
+    # frames (fixed per-clip seed 1000+k, matching effects_server), so the subject moves.
+    clips = []
+    n = len(frames)
+    nf = palette.ANIM_FRAMES
+    if n >= 2:
+        sample = [round(i * (n - 1) / (nf - 1)) for i in range(nf)]
+        for k, (name, fn) in enumerate(palette.ANIM_PALETTE):
+            urls = []
+            for j, fi in enumerate(sample):
+                res = fn([frames[fi]], 1000 + k, j)
+                img = res[0] if isinstance(res, tuple) else res
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                fname = f"clip_{name.replace(' ', '_')}_{j:02d}.jpg"
+                img.save(session_dir / fname, quality=85)
+                urls.append(f"/output/{timestamp}/{fname}")
+            clips.append({"name": name, "frames": urls, "fps": 6})
+
     return jsonify({
         "session": timestamp,
         "capture_ms": round(capture_ms, 1),
         "n_frames": len(frames),
         "results": payload,
+        "clips": clips,
         "source_url": f"/output/{timestamp}/_source_middle.jpg",
     })
 
@@ -246,7 +271,10 @@ async function capture() {
   }
 }
 
+let clipTimers = [];   // playback intervals for clip tiles — cleared on each re-render
+
 function render(data) {
+  clipTimers.forEach(clearInterval); clipTimers = [];
   grid.innerHTML = '';
   // Source frame first
   grid.appendChild(makeTile({
@@ -257,6 +285,36 @@ function render(data) {
   for (const r of data.results) {
     grid.appendChild(makeTile(r, false));
   }
+  // Clip tiles: one per ANIM effect — the effect rendered across the burst so the subject
+  // moves, played 6fps ping-pong (same as the gallery viewer's playFlipbook).
+  for (const c of (data.clips || [])) {
+    grid.appendChild(makeClipTile(c.name + ' (clip)', c.frames, c.fps || 6));
+  }
+}
+
+function makeClipTile(label, frames, fps) {
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  const img = document.createElement('img');
+  const seq = frames.concat(frames.slice(1, -1).reverse());   // ping-pong (no jump-cut)
+  seq.forEach(u => { const p = new Image(); p.src = u; });     // preload for smooth playback
+  img.src = seq[0];
+  let i = 0;
+  clipTimers.push(setInterval(() => { i = (i + 1) % seq.length; img.src = seq[i]; }, 1000 / fps));
+  img.addEventListener('click', () => { lbImg.src = img.src; lb.classList.add('open'); });
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = label;
+  meta.appendChild(name);
+  const tag = document.createElement('span');
+  tag.className = 'ms';
+  tag.textContent = fps + ' fps';
+  meta.appendChild(tag);
+  tile.appendChild(img);
+  tile.appendChild(meta);
+  return tile;
 }
 
 function makeTile(r, isSource) {

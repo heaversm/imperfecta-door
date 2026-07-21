@@ -19,6 +19,13 @@
 # to 1024x768 and the 1024x600 panel mis-scales it (off-center / black bars on the glass).
 wlr-randr --output HDMI-A-1 --custom-mode 1024x600@60 2>/dev/null || true
 
+# Which experience to show. 'effects' (default) = viewer.html slideshow;
+# 'melt' = the facecapture app. Flip with:  echo melt > ~/display_mode  (then relaunch).
+MODE="$(cat /home/imperfecta/display_mode 2>/dev/null || echo effects)"
+
+# --use-fake-ui-for-media-stream auto-accepts the getUserMedia camera prompt using
+# the REAL default device (the C920) — needed for the melt mode's live preview in a
+# headless kiosk. Harmless in effects mode (no getUserMedia there).
 chromium \
   --kiosk \
   --password-store=basic \
@@ -28,4 +35,5 @@ chromium \
   --check-for-update-interval=31536000 \
   --incognito \
   --allow-file-access-from-files \
-  "file:///home/imperfecta/kiosk_loading.html" &
+  --use-fake-ui-for-media-stream \
+  "file:///home/imperfecta/kiosk_loading.html?mode=${MODE}" &

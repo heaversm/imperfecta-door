@@ -18,6 +18,9 @@ import json
 import os
 import queue
 import random
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import zipfile
@@ -33,10 +36,16 @@ HOST = "0.0.0.0"
 PORT = 5050
 MAIXCAM_HOST = os.environ.get("MAIXCAM_HOST", "maixcam-288c.local")
 MAIXCAM_PORT = int(os.environ.get("MAIXCAM_PORT", "8080"))
-BURST_COUNT = int(os.environ.get("BURST_COUNT", "30"))
+BURST_COUNT = int(os.environ.get("BURST_COUNT", "12"))
 # Each effect is shown fullscreen, so render at ~display res. The spike (2026-06-23)
 # confirmed ~1024px is feasible on the Pi 3B+ when streamed (see the design spec).
 WORK_MAX_DIM = int(os.environ.get("WORK_MAX_DIM", "1024"))
+
+# Camera source: "maixcam" (default — HTTP burst from the networked MaixCam) or
+# "usb" (a local UVC webcam, e.g. the Logitech C920, captured via ffmpeg/V4L2).
+CAMERA_SOURCE = os.environ.get("CAMERA_SOURCE", "maixcam")
+USB_DEVICE = os.environ.get("USB_DEVICE", "/dev/video0")
+USB_SIZE = os.environ.get("USB_SIZE", "1280x720")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -71,8 +80,38 @@ def _scale_to_work(img: Image.Image) -> Image.Image:
     return img.resize((max(1, round(w * s)), max(1, round(h * s))), Image.LANCZOS)
 
 
+def _usb_grab(count: int) -> list[Image.Image]:
+    """Capture `count` frames from the local USB webcam (V4L2) via ffmpeg, decode to PIL.
+    Same post-processing (scale + gentle unsharp) as the MaixCam path so downstream
+    effects behave identically regardless of camera source."""
+    d = tempfile.mkdtemp(prefix="usbburst_")
+    try:
+        t0 = time.perf_counter()
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "v4l2", "-input_format", "mjpeg", "-framerate", "30",
+             "-video_size", USB_SIZE,
+             "-i", USB_DEVICE, "-frames:v", str(count), "-q:v", "3",
+             os.path.join(d, "f%03d.jpg")],
+            check=True, timeout=15,
+        )
+        frames = []
+        for name in sorted(os.listdir(d)):
+            img = Image.open(os.path.join(d, name))
+            img.load()
+            rgb = _scale_to_work(img.convert("RGB"))
+            rgb = rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+            frames.append(rgb)
+        print(f"  usb: grabbed {len(frames)} frame(s) in {(time.perf_counter() - t0) * 1000:.0f}ms")
+        return frames
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _pull_burst() -> list[Image.Image]:
-    """Fetch the burst ZIP from the MaixCam and decode each frame to a PIL Image."""
+    """Fetch the burst and decode each frame to a PIL Image (MaixCam HTTP or local USB)."""
+    if CAMERA_SOURCE == "usb":
+        return _usb_grab(BURST_COUNT)
     url = f"http://{MAIXCAM_HOST}:{MAIXCAM_PORT}/burst?count={BURST_COUNT}"
     t0 = time.perf_counter()
     resp = requests.get(url, timeout=8.0)
@@ -198,14 +237,26 @@ def trigger():
         # the ~3s burst+render — so the visitor immediately sees they did something.
         _push_sse("flash", {})
 
+        # In USB mode the viewer holds the C920 for its live mirror and releases it on this
+        # 'flash' event. Give it a beat to let go before we grab, so ffmpeg doesn't hit a
+        # busy device (a UVC cam allows one consumer at a time).
+        if CAMERA_SOURCE == "usb":
+            time.sleep(0.4)
+
         # Instant static first photo: one /photo frame (fast — single shot, not the 30-frame
         # burst) shown the moment it lands, with NO motion on it, so a real photo appears right
         # away while the burst + effects render behind it and then take over the loop.
         try:
-            r = requests.get(f"http://{MAIXCAM_HOST}:{MAIXCAM_PORT}/photo", timeout=4.0)
-            if r.ok:
-                pimg = _scale_to_work(Image.open(io.BytesIO(r.content)).convert("RGB"))
-                pimg = pimg.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+            if CAMERA_SOURCE == "usb":
+                grabbed = _usb_grab(1)
+                pimg = grabbed[0] if grabbed else None
+            else:
+                r = requests.get(f"http://{MAIXCAM_HOST}:{MAIXCAM_PORT}/photo", timeout=4.0)
+                pimg = None
+                if r.ok:
+                    pimg = _scale_to_work(Image.open(io.BytesIO(r.content)).convert("RGB"))
+                    pimg = pimg.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+            if pimg is not None:
                 pimg.save(os.path.join(RENDER_DIR, "first.jpg"), "JPEG", quality=88)
                 _push_sse("first", {"url": f"/first.jpg?t={int(time.time() * 1000)}"})
                 print("  first photo pushed")
