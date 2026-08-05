@@ -13,10 +13,17 @@
 				-webkit-tap-highlight-color: transparent;
 			}
 
+			:root {
+				/* ONE knob for face size — grid tracks, row height, and image
+				   height all scale from it. 120px is the original look. */
+				--face: 200px;
+			}
+
 			html,
 			body {
 				margin: 0;
-				overflow-x: hidden; /* the collage bleeds past the viewport edges */
+				height: 100%;
+				overflow: hidden; /* landscape kiosk: nothing scrolls */
 			}
 
 			body {
@@ -28,80 +35,42 @@
 				user-select: none;
 			}
 
-			#stage {
-				max-width: 800px;
-				margin: 0 auto;
+			/* the camera runs headless — snapshots only, never previewed */
+			#cam {
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 2px;
+				height: 2px;
+				opacity: 0;
+				pointer-events: none;
 			}
 
-			/* ---------- hero: the live camera, top center ---------- */
-			#hero {
-				display: flex;
-				flex-direction: column;
-				align-items: center;
-				gap: 20px;
-				margin-bottom: 36px;
-			}
-			#camwrap {
-				position: relative;
-			}
-			#cam {
-				display: block;
-				width: 100%;
-				aspect-ratio: 16 / 9;
-				object-fit: cover;
-				transform: scaleX(-1); /* mirror like a selfie */
+			/* ---------- capture panel: left half, revealed when the feed
+			   slides aside. Holds the frozen snapshot + spinner. ---------- */
+			#capturepanel {
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 50%;
+				height: 100%;
 				background: #000;
-				/* ease back in after the dissolve ends */
-				transition: opacity 0.9s ease;
+				z-index: 1;
 			}
-			/* frozen snapshot shown over the live video while a ring uploads */
-			#freeze {
-				position: absolute;
-				inset: 0;
+			#shot {
 				width: 100%;
 				height: 100%;
 				object-fit: cover;
-				display: none;
-			}
-			#camwrap.busy #freeze {
 				display: block;
 			}
-			/* particle canvas: the frozen frame dissolving upward while it loads */
-			#fx {
-				position: absolute;
-				left: 0;
-				width: 100%;
-				bottom: 0;
-				height: 200%; /* extends above the frame so pixels fly past the top */
-				pointer-events: none;
-				display: none;
-			}
-			#camwrap.fx #fx {
-				display: block;
-			}
-			/* during the fx the particles ARE the image — no photo behind,
-			   just the live video pulled way down */
-			#camwrap.fx #freeze {
-				display: none;
-			}
-			#camwrap.fx #cam {
-				opacity: 0; /* pure black behind the particles — once a pixel
-				               leaves, nothing remains where it was */
-				transition: none; /* vanish instantly at ring time */
-			}
-			/* thin white spinner over the camera while a capture processes
-			   (fallback only — hidden when the WebGL particle effect runs) */
-			#camwrap.fx::after {
-				display: none;
-			}
-			#camwrap.busy::after {
+			/* thin white spinner over the frozen frame while it uploads */
+			body.busy #capturepanel::after {
 				content: '';
 				position: absolute;
-				top: 50%;
-				left: 50%;
+				bottom: 24px;
+				right: 24px;
 				width: 48px;
 				height: 48px;
-				margin: -24px 0 0 -24px;
 				border: 2px solid rgba(255, 255, 255, 0.25);
 				border-top-color: #fff;
 				border-radius: 50%;
@@ -110,6 +79,95 @@
 			@keyframes spin {
 				to {
 					transform: rotate(360deg);
+				}
+			}
+			/* "PLEASE HOLD" overlay, centered on top of the spinner */
+			#hold {
+				position: absolute;
+				top: 50%;
+				left: 50%;
+				transform: translate(-50%, -50%);
+				font-size: 42px;
+				font-weight: 800;
+				letter-spacing: 0.08em;
+				white-space: nowrap;
+				color: #fff;
+				-webkit-text-stroke: 6px #000;
+				paint-order: stroke fill;
+				/* fallback outline for engines without paint-order on text */
+				text-shadow:
+					2px 2px 0 #000,
+					-2px 2px 0 #000,
+					2px -2px 0 #000,
+					-2px -2px 0 #000;
+				display: none;
+			}
+			body.busy #hold {
+				display: block;
+			}
+
+			/* ---------- feed: the collage, full screen. Slides right to half
+			   width while a capture uploads, then back. ---------- */
+			#feed {
+				position: fixed;
+				inset: 0;
+				background: #000;
+				z-index: 10;
+				overflow: hidden;
+				display: flex; /* lets #grid center via margin:auto (overflow-safe) */
+				transform: translateX(0);
+				transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+			}
+			body.busy #feed {
+				transform: translateX(50%);
+			}
+
+			#grid {
+				display: grid;
+				/* tracks narrower than the faces so neighbors genuinely
+				   overlap horizontally */
+				grid-template-columns: repeat(
+					auto-fill,
+					calc(var(--face) * 0.87)
+				);
+				justify-content: center;
+				align-items: end;
+				/* vertically center when the collage fits, but top-align when
+				   it overflows (auto margins collapse to 0 on overflow, unlike
+				   align-content:center which clips the first rows) */
+				margin: auto -40px;
+				/* full-bleed: hang a bit past the edges so border faces run
+				   off-screen instead of stopping */
+				width: calc(100% + 80px);
+				flex: none;
+				/* keep the first/last rows' negative cell margins on-screen */
+				padding: calc(var(--face) * 0.15) 0;
+			}
+			#grid .cell {
+				display: flex;
+				align-items: flex-end;
+				justify-content: center;
+				height: calc(var(--face) * 0.98);
+				margin: calc(var(--face) * -0.15) 0; /* rows overlap vertically */
+			}
+			#grid img {
+				max-width: none;
+				width: auto;
+				max-height: var(--face);
+			}
+
+			/* pop-in for a brand-new face */
+			.pop {
+				animation: pop 0.7s cubic-bezier(0.18, 0.9, 0.22, 1.2) both;
+			}
+			@keyframes pop {
+				0% {
+					scale: 0.3;
+					opacity: 0;
+				}
+				100% {
+					scale: 1;
+					opacity: 1;
 				}
 			}
 
@@ -136,47 +194,6 @@
 			#capture:disabled {
 				opacity: 0.4;
 				cursor: default;
-			}
-
-			/* ---------- grid: the collection, overlapping collage ---------- */
-			#grid {
-				display: grid;
-				/* tracks narrower than the faces (~90-130px wide) so neighbors
-				   genuinely overlap horizontally */
-				grid-template-columns: repeat(auto-fill, 104px);
-				justify-content: center;
-				align-items: end;
-				margin-top: -60px;
-				/* full-bleed: escape the 800px stage and hang a bit past the
-				   viewport so edge faces run off-screen instead of stopping */
-				width: calc(100vw + 80px);
-				margin-left: calc(50% - 50vw - 40px);
-			}
-			#grid .cell {
-				display: flex;
-				align-items: flex-end;
-				justify-content: center;
-				height: 118px;
-				margin: -18px 0;
-			}
-			#grid img {
-				max-width: none;
-				width: auto;
-			}
-
-			/* pop-in for a brand-new face */
-			.pop {
-				animation: pop 0.7s cubic-bezier(0.18, 0.9, 0.22, 1.2) both;
-			}
-			@keyframes pop {
-				0% {
-					scale: 0.3;
-					opacity: 0;
-				}
-				100% {
-					scale: 1;
-					opacity: 1;
-				}
 			}
 
 			/* capture flash */
@@ -206,27 +223,25 @@
 		</style>
 	</head>
 	<body>
-		<div id="stage">
-			<section id="hero">
-				<div id="camwrap">
-					<video id="cam" autoplay playsinline muted></video>
-					<img id="freeze" alt="" />
-					<canvas id="fx"></canvas>
-				</div>
-				<button id="capture">Ring Doorbell</button>
-			</section>
+		<div id="capturepanel">
+			<img id="shot" alt="" />
+			<div id="hold"></div>
+		</div>
+		<div id="feed">
 			<section id="grid"></section>
 		</div>
 
+		<video id="cam" autoplay playsinline muted></video>
+		<button id="capture">Ring Doorbell</button>
 		<div id="flash"></div>
 		<canvas id="canvas"></canvas>
 
 		<script>
 			const els = {
 				grid: document.getElementById('grid'),
+				hold: document.getElementById('hold'),
 				cam: document.getElementById('cam'),
-				freeze: document.getElementById('freeze'),
-				camwrap: document.getElementById('camwrap'),
+				shot: document.getElementById('shot'),
 				capture: document.getElementById('capture'),
 				flash: document.getElementById('flash'),
 				canvas: document.getElementById('canvas'),
@@ -237,7 +252,25 @@
 			let newestId = null // id to pop-animate when it enters the grid
 			let feedKey = '' // fingerprint of the rendered feed, to skip no-op re-renders
 
-			// ---- webcam ----
+			// how long the capture panel stays open at minimum, so the slide +
+			// spinner read as a moment even when the upload is fast
+			const MIN_OPEN_MS = 2000
+			const delay = (ms) => new Promise((r) => setTimeout(r, ms))
+
+			// ---- hold messages: one random pick per ring ----
+			const HOLD_MSGS = [
+				'PLEASE HOLD',
+				'GRABBING SOUL',
+				'CALLING HOME',
+				'OH MY GOD',
+				'ONE MOMENT',
+			]
+			function pickHoldMsg() {
+				els.hold.textContent =
+					HOLD_MSGS[Math.floor(Math.random() * HOLD_MSGS.length)]
+			}
+
+			// ---- webcam (headless: stream runs, but is never previewed) ----
 			async function initCam() {
 				try {
 					const stream = await navigator.mediaDevices.getUserMedia({
@@ -263,7 +296,7 @@
 				c.width = target
 				c.height = Math.round(vh * scale)
 				const ctx = c.getContext('2d')
-				// mirror to match the preview
+				// mirror like a selfie
 				ctx.translate(c.width, 0)
 				ctx.scale(-1, 1)
 				ctx.drawImage(v, 0, 0, c.width, c.height)
@@ -290,7 +323,7 @@
 					cell.innerHTML =
 						'<img src="' +
 						h.cutoutUrl +
-						'" alt="" style="max-height:120px; transform: translate(' +
+						'" alt="" style="transform: translate(' +
 						dx +
 						'px,' +
 						dy +
@@ -356,188 +389,6 @@
 				}
 			}
 
-			// ---- loader fx: the frozen frame dissolves into pixels that flow
-			// up and funnel toward top center. All motion lives in the vertex
-			// shader (position is a pure function of time), so the CPU does
-			// nothing per frame — smooth even on a Raspberry Pi.
-			const fx = (() => {
-				const canvas = document.getElementById('fx')
-				const gl = canvas.getContext('webgl', {
-					alpha: true,
-					premultipliedAlpha: false,
-				})
-				if (!gl) return null
-
-				const vsrc = `
-					attribute vec2 a_origin;   // image uv, y down
-					attribute vec3 a_color;
-					attribute float a_seed;    // 0..1
-					uniform float u_time;
-					uniform float u_point;
-					varying vec3 v_color;
-					varying float v_alpha;
-					void main() {
-						v_color = a_color;
-						// ONE-SHOT dissolve: every pixel starts in place (the
-						// assembled photo), then rows peel off top-to-bottom,
-						// each pixel flying from its own position into the
-						// slurp point at center-top.
-						float delay = a_origin.y * 2.4 + a_seed * 0.45;
-						float travel = 1.2 + a_seed * 0.5;
-						float phase = clamp((u_time - delay) / travel, 0.0, 1.0);
-						float t = phase * phase * (3.0 - 2.0 * phase);
-						t = pow(t, 1.5); // linger, then accelerate — slurp
-						// the frame occupies the bottom half of the canvas
-						// (uv y 0..1 -> canvas y 0.5..1)
-						vec2 start = vec2(a_origin.x, 0.5 + a_origin.y * 0.5);
-						vec2 target = vec2(0.5, 0.0);
-						// curved path: control point bows sideways per particle
-						vec2 ctrl = vec2(
-							mix(start.x, target.x, 0.55) + (a_seed - 0.5) * 0.25,
-							mix(start.y, target.y, 0.55)
-						);
-						vec2 pos = mix(mix(start, ctrl, t), mix(ctrl, target, t), t);
-						// stay visible almost all the way into the point
-						v_alpha = 1.0 - smoothstep(0.93, 1.0, t);
-						gl_Position = vec4(pos.x * 2.0 - 1.0, 1.0 - pos.y * 2.0, 0.0, 1.0);
-						gl_PointSize = u_point * (1.0 - 0.7 * t);
-					}`
-				const fsrc = `
-					precision mediump float;
-					varying vec3 v_color;
-					varying float v_alpha;
-					void main() {
-						gl_FragColor = vec4(v_color, v_alpha);
-					}`
-				const mk = (type, src) => {
-					const s = gl.createShader(type)
-					gl.shaderSource(s, src)
-					gl.compileShader(s)
-					return s
-				}
-				const prog = gl.createProgram()
-				gl.attachShader(prog, mk(gl.VERTEX_SHADER, vsrc))
-				gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, fsrc))
-				gl.linkProgram(prog)
-				if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null
-				gl.useProgram(prog)
-				gl.enable(gl.BLEND)
-				gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-				const loc = {
-					origin: gl.getAttribLocation(prog, 'a_origin'),
-					color: gl.getAttribLocation(prog, 'a_color'),
-					seed: gl.getAttribLocation(prog, 'a_seed'),
-					time: gl.getUniformLocation(prog, 'u_time'),
-					point: gl.getUniformLocation(prog, 'u_point'),
-				}
-				const buf = gl.createBuffer()
-				let count = 0
-				let raf = 0
-
-				// sample the snapshot canvas into a particle per pixel block
-				function load(srcCanvas) {
-					const GRID = 420 // particles across (~99k total — real pixels)
-					const gh = Math.round(
-						(GRID * srcCanvas.height) / srcCanvas.width,
-					)
-					const ctx = srcCanvas.getContext('2d')
-					const img = ctx.getImageData(
-						0,
-						0,
-						srcCanvas.width,
-						srcCanvas.height,
-					).data
-					const stride = 6 // origin xy, rgb, seed
-					const data = new Float32Array(GRID * gh * stride)
-					let n = 0
-					for (let y = 0; y < gh; y++) {
-						for (let x = 0; x < GRID; x++) {
-							const px = Math.floor(((x + 0.5) / GRID) * srcCanvas.width)
-							const py = Math.floor(((y + 0.5) / gh) * srcCanvas.height)
-							const o = (py * srcCanvas.width + px) * 4
-							const d = n * stride
-							data[d] = (x + 0.5) / GRID
-							data[d + 1] = (y + 0.5) / gh
-							data[d + 2] = img[o] / 255
-							data[d + 3] = img[o + 1] / 255
-							data[d + 4] = img[o + 2] / 255
-							data[d + 5] = Math.random()
-							n++
-						}
-					}
-					count = n
-					gl.bindBuffer(gl.ARRAY_BUFFER, buf)
-					gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW)
-					const F = 4
-					gl.vertexAttribPointer(loc.origin, 2, gl.FLOAT, false, stride * F, 0)
-					gl.vertexAttribPointer(loc.color, 3, gl.FLOAT, false, stride * F, 2 * F)
-					gl.vertexAttribPointer(loc.seed, 1, gl.FLOAT, false, stride * F, 5 * F)
-					gl.enableVertexAttribArray(loc.origin)
-					gl.enableVertexAttribArray(loc.color)
-					gl.enableVertexAttribArray(loc.seed)
-					return GRID
-				}
-
-				// full dissolve: max row delay + max travel time (see shader)
-				const DURATION = 4700
-				let startedAt = 0
-
-				return {
-					// resolves once the one-shot dissolve has fully played out
-					finished() {
-						return new Promise((r) =>
-							setTimeout(
-								r,
-								Math.max(0, startedAt + DURATION - performance.now()),
-							),
-						)
-					},
-					start(srcCanvas) {
-						startedAt = performance.now()
-						const grid = load(srcCanvas)
-						const dpr = Math.min(window.devicePixelRatio || 1, 2)
-						canvas.width = canvas.clientWidth * dpr
-						canvas.height = canvas.clientHeight * dpr
-						gl.viewport(0, 0, canvas.width, canvas.height)
-						gl.uniform1f(loc.point, (canvas.width / grid) * 1.05)
-						const t0 = performance.now()
-						// Optional FPS overlay for perf validation on the Pi: add ?fps=1
-						const showFps = new URLSearchParams(location.search).has('fps')
-						let fpsEl = null
-						if (showFps) {
-							fpsEl = document.createElement('div')
-							fpsEl.style.cssText =
-								'position:fixed;top:6px;left:6px;z-index:2000;color:#0f0;' +
-								'font:14px monospace;background:rgba(0,0,0,.6);padding:4px 8px'
-							document.body.appendChild(fpsEl)
-						}
-						let frames = 0
-						let lastReport = t0
-						const tick = () => {
-							const now = performance.now()
-							gl.uniform1f(loc.time, (now - t0) / 1000)
-							gl.clearColor(0, 0, 0, 0)
-							gl.clear(gl.COLOR_BUFFER_BIT)
-							gl.drawArrays(gl.POINTS, 0, count)
-							frames++
-							if (fpsEl && now - lastReport >= 500) {
-								fpsEl.textContent =
-									(frames / ((now - lastReport) / 1000)).toFixed(0) + ' fps'
-								frames = 0
-								lastReport = now
-							}
-							raf = requestAnimationFrame(tick)
-						}
-						tick()
-					},
-					stop() {
-						cancelAnimationFrame(raf)
-						gl.clear(gl.COLOR_BUFFER_BIT)
-					},
-				}
-			})()
-
 			// ---- doorbell chime: two-tone ding-dong, synthesized ----
 			function ding() {
 				try {
@@ -565,6 +416,10 @@
 			}
 
 			// ---- capture flow ----
+			// Press → snap a frozen frame → the feed slides to the right half,
+			// revealing the frozen shot + spinner on the left → upload → the
+			// feed slides back over it. All motion is the one CSS transition
+			// on #feed's transform.
 			async function capture() {
 				if (busy) return
 				ding()
@@ -578,13 +433,11 @@
 				busy = true
 				els.capture.disabled = true
 				els.capture.textContent = 'Ringing…'
-				els.freeze.src = dataUrl // freeze the moment being uploaded
-				els.camwrap.classList.add('busy')
-				if (fx) {
-					els.camwrap.classList.add('fx')
-					fx.start(els.canvas) // dissolve the frozen frame into pixels
-				}
+				els.shot.src = dataUrl // freeze the moment being uploaded
+				document.body.classList.add('busy') // feed slides aside
+				pickHoldMsg()
 
+				const opened = delay(MIN_OPEN_MS)
 				try {
 					const res = await fetch('/api/capture', {
 						method: 'POST',
@@ -603,17 +456,11 @@
 				} catch (err) {
 					console.error('capture', err)
 				} finally {
-					// let the dissolve play out fully before bringing the
-					// live video back, even if the server finished first
-					if (fx && els.camwrap.classList.contains('fx')) {
-						await fx.finished()
-					}
+					await opened // never slam shut on a fast upload
 					busy = false
 					els.capture.disabled = false
 					els.capture.textContent = 'Ring Doorbell'
-					els.camwrap.classList.remove('busy')
-					els.camwrap.classList.remove('fx')
-					if (fx) fx.stop()
+					document.body.classList.remove('busy') // feed slides back
 				}
 			}
 
