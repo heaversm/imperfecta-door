@@ -21,10 +21,18 @@ interface FeedEntry {
 
 const MANIFEST_KEY = "manifest.json";
 
+// The kiosk page runs as a plain local HTML file (e.g. on a Raspberry Pi) and
+// calls this API cross-origin, so every /api response carries CORS headers.
+const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "content-type",
+};
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...CORS },
   });
 }
 
@@ -48,6 +56,9 @@ export class RemovalContainer extends Container<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+      return new Response(null, { status: 204, headers: CORS });
+    }
     if (url.pathname === "/ws") return this.wsConnect(request);
     if (url.pathname === "/api/heads") return this.heads();
     if (url.pathname === "/api/capture" && request.method === "POST") {
